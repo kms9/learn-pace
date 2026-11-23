@@ -1,0 +1,6 @@
+[submodule "upstream/deeptutor"]
+	path = upstream/deeptutor
+	url = https://github.com/HKUDS/DeepTutor.git
+[submodule "upstream/cherry-studio-mobile"]
+	path = upstream/cherry-studio-mobile
+	url = https://github.com/CherryHQ/cherry-studio-app.git

@@ -73,7 +73,36 @@ Mobile UI
 | Cherry Studio Mobile | [CherryHQ/cherry-studio-app](https://github.com/CherryHQ/cherry-studio-app) | React Native / Expo、移动端进程内 Pi Agent Runtime、SQLite、原生工具 |
 | Cherry Studio Desktop | [CherryHQ/cherry-studio](https://github.com/CherryHQ/cherry-studio) | 跨平台架构与桌面端实现参考 |
 
-本仓库是**独立项目**，不是上述仓库的 Fork。本阶段通过链接进行上游引用，**不以 Git submodule 引入完整源代码**；后续如实际复用代码，将分别确认许可证与归属说明。
+本仓库是**独立项目**，不是上述仓库的 Fork。DeepTutor 与 Cherry Studio Mobile 作为 **Git Submodule** 固定到指定上游提交，仅供源码对照和后续迁移研究；Cherry Studio Desktop 保留链接参考。后续实际复用代码时，仍需遵循相应许可证与归属要求。
+
+### 上游源码 Submodule
+
+| 本地路径 | 上游 | 用途 |
+| --- | --- | --- |
+| `upstream/deeptutor` | [HKUDS/DeepTutor](https://github.com/HKUDS/DeepTutor) | LF01/LF02 学习流程、领域模型、Agent 与工具源码 |
+| `upstream/cherry-studio-mobile` | [CherryHQ/cherry-studio-app](https://github.com/CherryHQ/cherry-studio-app) | React Native / Expo、Pi Durable、本地数据和移动构建参考 |
+
+首次克隆（包含子模块）：
+
+```bash
+git clone --recurse-submodules https://github.com/kms9/learn-pace.git
+```
+
+已有克隆初始化子模块：
+
+```bash
+git submodule update --init --recursive
+```
+
+需要评估上游更新时手动推进引用并审阅差异：
+
+```bash
+git submodule update --remote -- upstream/deeptutor upstream/cherry-studio-mobile
+git status
+# 确认上游变化后，另行提交子模块指针更新。
+```
+
+子模块是 **gitlink（mode 160000）**，主仓库记录的是上游 Commit SHA，并不把两个项目的全部源码复制到主仓库。首次克隆会下载对应源码，体积和耗时取决于上游仓库及其历史；不需要源码时可以先普通 `git clone`，再按需初始化子模块。
 
 ## 当前阶段与下一步
 
