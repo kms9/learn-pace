@@ -1,6 +1,6 @@
 # Learn Pace
 
-> 本地优先的个性化学习 Agent 项目。以 [DeepTutor](https://github.com/HKUDS/DeepTutor) 的学习业务为参考，借鉴 [Cherry Studio Mobile](https://github.com/CherryHQ/cherry-studio-app) 的移动端本地 Agent 架构。
+> 本地优先的个性化学习 Agent 项目。以 [DeepTutor](https://github.com/HKUDS/DeepTutor) 的学习业务为参考，借鉴 [DeepTutor Lite](https://github.com/leonyvon/deeptutor-lite) 的轻量化 Agent 实现与 [Cherry Studio Mobile](https://github.com/CherryHQ/cherry-studio-app) 的移动端本地 Agent 架构。
 
 ## 项目定位
 
@@ -63,23 +63,27 @@ Mobile UI
          └── Model Provider Adapter ───► 外部模型 API（云端或局域网）
 ```
 
-候选技术：**React Native / Expo + TypeScript + SQLite**；Agent Runtime 对比 **Pi Durable** 与 DeepTutor 已有的实验性 TypeScript Chat Engine。此处是技术评估方向，**尚未确定实现，也尚未完成可运行客户端**。
+候选技术：**React Native / Expo + TypeScript + SQLite**；Agent Runtime 对比 **Pi Durable** 与 DeepTutor 已有的实验性 TypeScript Chat Engine。DeepTutor Lite 提供基于 Pi Agent Core / Pi AI 的独立 TypeScript CLI 实现，可用于研究通用 Agent Loop、模型接入、Tool 注册、Skills / Prompts 装配及会话恢复的替代方案；其 Node.js 运行时与 Ink TUI 不直接适用于移动端。此处是技术评估方向，**尚未确定实现，也尚未完成可运行客户端**。
 
 ## 上游项目与参考关系
 
 | 项目 | 仓库 | 参考重点 |
 | --- | --- | --- |
 | DeepTutor | [HKUDS/DeepTutor](https://github.com/HKUDS/DeepTutor) | LF01 / LF02 的业务行为、学习状态模型、Agent / Tool 接口 |
+| DeepTutor Lite | [leonyvon/deeptutor-lite](https://github.com/leonyvon/deeptutor-lite) | Pi Harness 轻量化装配、Skills / Prompts 与 Tools 封装、LF01 对话交互及 LF02 最小实现 |
 | Cherry Studio Mobile | [CherryHQ/cherry-studio-app](https://github.com/CherryHQ/cherry-studio-app) | React Native / Expo、移动端进程内 Pi Agent Runtime、SQLite、原生工具 |
 | Cherry Studio Desktop | [CherryHQ/cherry-studio](https://github.com/CherryHQ/cherry-studio) | 跨平台架构与桌面端实现参考 |
 
-本仓库是**独立项目**，不是上述仓库的 Fork。DeepTutor 与 Cherry Studio Mobile 作为 **Git Submodule** 固定到指定上游提交，仅供源码对照和后续迁移研究；Cherry Studio Desktop 保留链接参考。后续实际复用代码时，仍需遵循相应许可证与归属要求。
+本仓库是**独立项目**，不是上述仓库的 Fork。DeepTutor、DeepTutor Lite 与 Cherry Studio Mobile 作为 **Git Submodule** 固定到指定上游提交，仅供源码对照和后续迁移研究；Cherry Studio Desktop 保留链接参考。后续实际复用代码时，仍需遵循相应许可证与归属要求。
+
+DeepTutor Lite 仅作为轻量化提取参考，不是 Learn Pace 的运行时依赖，也不作为学习业务的权威基线：LF01 可参考其 [Harness](https://github.com/leonyvon/deeptutor-lite/blob/main/src/agent/harness.ts)、[Skills / Prompts](https://github.com/leonyvon/deeptutor-lite/blob/main/src/agent/resources.ts) 与交互式提问/恢复机制；LF02 可参考其 [Mastery Tools](https://github.com/leonyvon/deeptutor-lite/blob/main/src/tools/mastery.ts) 的封装方式，但学习证据、掌握门槛、状态推进及复习规则仍以官方 DeepTutor 的 Learning Domain 和测试为业务基线。移动端运行时与原生适配继续以 Cherry Studio Mobile 为工程参考。
 
 ### 上游源码 Submodule
 
 | 本地路径 | 上游 | 用途 |
 | --- | --- | --- |
 | `upstream/deeptutor` | [HKUDS/DeepTutor](https://github.com/HKUDS/DeepTutor) | LF01/LF02 学习流程、领域模型、Agent 与工具源码 |
+| `upstream/deeptutor-lite` | [leonyvon/deeptutor-lite](https://github.com/leonyvon/deeptutor-lite) | Pi Agent Core / Pi AI、轻量 Harness、Skills / Tools、LF01 / LF02 提取参考 |
 | `upstream/cherry-studio-mobile` | [CherryHQ/cherry-studio-app](https://github.com/CherryHQ/cherry-studio-app) | React Native / Expo、Pi Durable、本地数据和移动构建参考 |
 
 首次克隆（包含子模块）：
@@ -97,12 +101,12 @@ git submodule update --init --recursive
 需要评估上游更新时手动推进引用并审阅差异：
 
 ```bash
-git submodule update --remote -- upstream/deeptutor upstream/cherry-studio-mobile
+git submodule update --remote -- upstream/deeptutor upstream/deeptutor-lite upstream/cherry-studio-mobile
 git status
 # 确认上游变化后，另行提交子模块指针更新。
 ```
 
-子模块是 **gitlink（mode 160000）**，主仓库记录的是上游 Commit SHA，并不把两个项目的全部源码复制到主仓库。首次克隆会下载对应源码，体积和耗时取决于上游仓库及其历史；不需要源码时可以先普通 `git clone`，再按需初始化子模块。
+子模块是 **gitlink（mode 160000）**，主仓库记录的是上游 Commit SHA，并不把各上游项目的全部源码复制到主仓库。首次克隆会下载对应源码，体积和耗时取决于上游仓库及其历史；不需要源码时可以先普通 `git clone`，再按需初始化子模块。
 
 ## 当前阶段与下一步
 
