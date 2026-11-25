@@ -4,3 +4,8 @@ packages:
 
 onlyBuiltDependencies:
   - esbuild
+patchedDependencies:
+  '@earendil-works/pi-ai@1.6.0': patches/@earendil-works__pi-ai@1.6.0.patch
+
+# Keep patched paths compatible with Android Prefab.
+virtualStoreDirMaxLength: 40

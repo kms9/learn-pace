@@ -15,8 +15,13 @@ export function loadModelConfigFromEnv(
   const apiKey = env.OPENAI_API_KEY?.trim();
   if (!baseUrl) throw new Error("Missing PI_OPENAI_BASE_URL in environment");
   if (!apiKey) throw new Error("Missing OPENAI_API_KEY in environment");
-  const url = URL.parse(baseUrl);
-  if (!url || !["http:", "https:"].includes(url.protocol) || url.username || url.password ||
+  let url: URL;
+  try {
+    url = new URL(baseUrl);
+  } catch {
+    throw new Error("Invalid PI_OPENAI_BASE_URL");
+  }
+  if (!url.hostname || !["http:", "https:"].includes(url.protocol) || url.username || url.password ||
       url.search || url.hash) {
     throw new Error("Invalid PI_OPENAI_BASE_URL");
   }

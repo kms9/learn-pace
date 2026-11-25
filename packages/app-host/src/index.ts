@@ -20,3 +20,5 @@ export interface ApplicationHost {
   readonly runtime: AgentRuntime;
   dispatch(command: ApplicationCommand): Promise<CommandReceipt>;
 }
+
+export { StudyWorkbench, type StudySnapshot } from "./study-workbench.js";

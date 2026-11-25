@@ -34,11 +34,12 @@ export function createTurnModels(
   apiKey: string,
   onDelta: (delta: string) => void,
   onProviderFailure: (message: string) => void,
+  fetch?: typeof globalThis.fetch,
 ) {
   // Bind the credential only at the request boundary. The model and transcript carry no key.
   const stream: ProviderStreams["streamSimple"] = (_model, context, options) =>
     lazyStream(model, async () => {
-      const source = streamSimple(model, context, { ...options, apiKey, maxRetries: 0 });
+      const source = streamSimple(model, context, { ...options, apiKey, fetch: fetch ?? options?.fetch, maxRetries: 0 });
       return (async function* () {
         for await (const event of source) {
           if (event.type === "text_delta" && !options?.signal?.aborted) onDelta(event.delta);

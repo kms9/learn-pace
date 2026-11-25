@@ -2,7 +2,28 @@
   "name": "@learn-pace/mobile",
   "version": "0.1.0",
   "private": true,
+  "main": "index.ts",
   "scripts": {
-    "typecheck": "echo \"mobile Expo app scaffold pending M1 S1\""
+    "start": "EXPO_NO_DOTENV=1 expo start --dev-client",
+    "android": "EXPO_NO_DOTENV=1 expo run:android",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@learn-pace/app-host": "workspace:*",
+    "@learn-pace/domain": "workspace:*",
+    "@learn-pace/infra": "workspace:*",
+    "@learn-pace/runtime": "workspace:*",
+    "expo": "58.0.22",
+    "expo-build-properties": "58.0.12",
+    "expo-crypto": "58.0.7",
+    "expo-dev-client": "58.0.18",
+    "expo-secure-store": "58.0.2",
+    "expo-sqlite": "58.0.15",
+    "react": "19.3.0",
+    "react-native": "0.88.1"
+  },
+  "devDependencies": {
+    "@types/react": "^19.2.0",
+    "babel-preset-expo": "~58.0.0"
   }
 }

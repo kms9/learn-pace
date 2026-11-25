@@ -10,5 +10,13 @@
   },
   "dependencies": {
     "@learn-pace/domain": "workspace:*"
+  },
+  "peerDependencies": {
+    "expo-sqlite": "58.0.15",
+    "expo-secure-store": "58.0.2"
+  },
+  "exports": {
+    ".": "./src/index.ts",
+    "./expo": "./src/expo.ts"
   }
 }

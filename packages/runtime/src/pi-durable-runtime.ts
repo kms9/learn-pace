@@ -61,6 +61,7 @@ export class PiDurableRuntime implements AgentRuntime {
   constructor(
     private readonly config: ModelConfig,
     private readonly registerQuestion?: RegisterQuestionHandler,
+    private readonly fetch?: typeof globalThis.fetch,
   ) {}
 
   registerTool(tool: RuntimeTool): void {
@@ -110,7 +111,7 @@ export class PiDurableRuntime implements AgentRuntime {
         // turns so an answer printed before a call cannot reach the learner.
         if (!register) emit({ type: "text_delta", delta });
         else if (!questionAttempted) bufferedText.push(delta);
-      }, (message) => { failure = message; });
+      }, (message) => { failure = message; }, this.fetch);
       const tools = [...this.tools.values()].filter((tool) => allowed.has(tool.name)).map((tool) =>
         defineTool({
           name: tool.name,

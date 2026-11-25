@@ -10,6 +10,7 @@
   },
   "dependencies": {
     "@learn-pace/domain": "workspace:*",
-    "@learn-pace/runtime": "workspace:*"
+    "@learn-pace/runtime": "workspace:*",
+    "@learn-pace/infra": "workspace:*"
   }
 }
