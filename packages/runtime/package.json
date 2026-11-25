@@ -5,10 +5,21 @@
   "type": "module",
   "main": "./src/index.ts",
   "types": "./src/index.ts",
+  "engines": {
+    "node": ">=22.19.0"
+  },
   "scripts": {
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "smoke:deepseek": "node --env-file=../../.env --import tsx scripts/smoke-deepseek.ts"
   },
   "dependencies": {
+    "@earendil-works/chord": "1.6.0",
+    "@earendil-works/pi-ai": "1.6.0",
+    "@earendil-works/pi-durable": "1.6.0",
+    "@earendil-works/pi-schema": "1.6.0",
     "@learn-pace/domain": "workspace:*"
+  },
+  "devDependencies": {
+    "tsx": "4.23.15"
   }
 }
