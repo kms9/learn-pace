@@ -33,44 +33,16 @@
 
 **判定：主路径与关键分支已有原型表达，达到可用于技术 PoC 和需求评审的程度；尚不能判定工程闭环、实际学习效果或全部边界状态通过。** 不需新增独立一级页面；缺口主要是状态、可点击原型、业务契约及可执行验收。
 
-## 3. 页面/交互层仍需补齐的状态
+## 3. 缺口与契约清单（已归口至 PRD 单一事实来源）
 
-| 优先级 | 所在页 | 缺口 | 通过条件 |
-|---|---|---|---|
-| P0 | P02/P06 | 实时生成、停止、工具授权、拒绝/超时、模型未配置 | 明确当前阶段；取消不伪造成功；返回原操作 |
-| P0 | P06 Outline | 先修冲突/无可学目标、大纲修订删除已评估目标、过期预览 | 解释阻塞原因；提交须检查 Revision；不可误报完成 |
-| P0 | P06 Study/Review | 提交中、重复提交、待澄清、评分失败、过期题卡 | 保持同一交互、正确拒绝旧请求、无虚假掌握 |
-| P0 | P06 / P05 | 真正的延期知识点、无到期复习、提前退出、主动复习、错误复核结果 | 待办不被清空；延期不是达标；允许非到期主动复习 |
-| P0 | P07 | 未配置/测试失败、备份进行中/完成/失败、恢复后凭据重配 | 本地可浏览；失败保留原数据；用户明确同意外发上下文 |
-| P0 | 全局 | 空态、草稿、载入/失败、输入键盘/长文本/公式、小屏返回 | 导航不丢草稿、滚动锚点、题卡与会话状态；触控验证 |
-| P1 | P05/P07 | 画像及策略编辑细节、全局检索、丰富学习统计 | 明确显式偏好与推断观察，避免标签化 |
+为避免文档多处复制导致规则漂移，本复评梳理出的页面缺口、业务契约与 UI-数据追踪链已全部归口至对应 PRD 文档作为唯一权威出处：
 
-## 4. 业务契约与数据流缺口
+- **页面/交互层仍需补齐的状态**：见 [PRD 02 · 页面布局与交互 §4.3](../prd/02-page-layout-interaction.md#43-页面交互层仍需补齐的状态)
+- **从 UI 到数据的统一追踪链与业务契约**：见 [PRD 07 · 数据流与业务命令 §8.3–§8.4](../prd/07-data-flow.md#83-从-ui-到数据的统一追踪链)
+- **端到端验收标准与发布门禁**：见 [PRD 09 · 闭环验收标准](../prd/09-acceptance-criteria.md)
 
-- **作用域与来源**：确定 path_id、objective_id、session_id、turn_id、interaction_id、question_id/question_version、submission_id、evidence_id 关系；所有写入由可信 Host 绑定身份、模式和路径，不由模型任意选择。LF01 的对话和辅助反馈只有明确关联且经过受信任评估才能进入 LF02；跨会话/重放保持来源。
-- **状态分离**：PathStatus、SessionMode、ObjectiveStatus、TeachingStage、InteractionStatus、TurnStatus、ReviewTaskStatus 分开。定义允许转移、拒绝条件及失败回执。路径全部掌握才完成学习阶段；延期、循环、先修受阻不等于完成。复习不通过按已冻结策略失去系统掌握/进入补救或标记保持风险，不能混用掌握与保持两个指标。
-- **评估合同**：四种知识类型的题型与 Rubric、部分分规则、独立性、题目版本、重复题、诊断的作用和无效题处理。定性必须记录原回答、关键标准、依据、判定模型/版本；模型判定不可直接修改状态。定量按默认近5次加权评分及1/2次上限；输入证据须有效且符合独立性政策。局部辅导、查看原解、资料提示要记录曝光，不能只靠 `hints_used` 按钮。
-- **复习规则**：评估何时产生任务、失败如何回补救、什么时候重新入队、提前结束保留任务、下次复习时间、重排/时区及时间回拨的规则。需确定定量掌握与保持度的更新关系（V0.2 的失败回退只是明确选定策略的示例），锁定一组可复算测试样本。
-- **一致性和恢复**：创建或修改大纲、题卡登记、作答提交、评分提交必须具有明确的权威存储及回执。答案先写入；外部模型评估在锁外；短事务检查 interaction/version 和 path_revision，写 Attempt/Evidence/Mastery/Review/DomainEvent，提交后才刷新 UI。同一 submission_id 相同请求幂等，不同请求拒绝；旧题卡/过期预览拒绝并刷新。每路径最多一个有效待答交互和修改型 Turn。Agent DB 不得覆盖应用业务 DB；恢复使用业务回执、事件与 Runtime checkpoint 对账。作废证据保留审计并重算。删除/归档、备份恢复跨引用需明确。
-- **安全与设备**：只允许授权 Tool 与资料，外部模型接收最小必要上下文；密钥独立保存。未成年人数据/隐私、模型输出、授权来源及第三方协议审查是公开交付前的门槛。
+## 4. 下一步（已与最新实施方案对齐）
 
-## 5. 从 UI 到数据的统一追踪链
+已确认工程决策（2026-11-24）：开源并获 Cherry Studio App 作者明确授权复用、采用最新版 Pi Durable、首期聚焦 DeepSeek Flash、主流程先行/事务控制后置。详细分阶段计划（M0 → M1 → M2-A 主流程 → M2-B 事务与恢复加固 → M3 MVP 交付）见[可行性评估与实施方案](feasibility-and-plan-v0.2.md)与[实施路线](../roadmap.md)。
 
-| 用户操作 | Command / 应用服务 | 权威写入 | UI 成功回执 |
-|---|---|---|---|
-| 提问 | SubmitMessage | Session, Message, Turn, Submission | MessageCommitted；历史恢复 |
-| 选文 | CreateThread | Thread, Quote anchor, source version | 子会话 ID；返回原位置 |
-| 转目标 | CreateLearningPath | Path, path sources, session binding | PathCreated；进入 Outline |
-| 确认/修订 | CommitOutline / ReviseOutline | Module/Objective, dependencies, revision, event | OutlineCommitted；Study 准入 |
-| 出题 | RegisterQuestion | Question version, Interaction, public card | QuestionPresented；本轮结束 |
-| 提示/作答 | RecordHint/SubmitAnswer | Exposure, submission_id, 原答案, interaction status | AnswerRecorded；待评分 |
-| 评分 | CommitAssessment | Attempt, Evidence, MasteryState, ReviewTask, Event, Revision（同事务） | AssessmentCommitted；刷新全部投影 |
-| 作废/复核 | VoidAssessment / Regrade | 证据有效性、重算结果及事件 | 修订回执；重算状态和任务 |
-| 复习 | CompleteReview | 有效复习证据、任务结果、新计划 | ReviewCompleted / ReviewScheduled；显示结果 |
-| 恢复 | RecoverApplication / RestoreBackup | 校验后的业务快照与恢复记录 | 原交互、已提交结果或明确失败态 |
-
-## 6. 下一步（不新增主页面）
-
-M0：冻结页面状态、4 Tab、独立评估规则及复习策略；把上述表变为可点击交互与业务状态契约。M1：真机 PoC：外部模型→结构化题卡→写 SQLite→杀进程→恢复同一题→评分→事务/回执→UI 同步。M2：实现 LF01、LF02 及 AC-01–07；补齐异常矩阵并用可控时钟、故障注入验证。M3：AC-08，Android 发布验证，备份与安全审查；随后按需求扩展课程包、RAG、互动小游戏和跨设备同步。
-
-本轮未修改 GitHub 仓库，也未执行 Learn Pace App 的功能测试。
+当前未执行 Learn Pace App 的功能测试。

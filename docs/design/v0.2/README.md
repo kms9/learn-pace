@@ -1,6 +1,6 @@
 # V0.2 原型（12 组，41 个状态）
 
-[下载 HTML](prototype.html) 后在浏览器打开。该自包含静态稿不依赖外部 PNG。组图及独立截图待补传；以 [闭环复评](../../evaluation/learning-loop-review-v0.2.md) 为业务说明。
+[下载 HTML](prototype.html) 后在浏览器打开。该自包含静态稿不依赖外部 PNG；12 张组图与 41 张独立状态截图已同步存放于 `boards/` 与 `screens/`（校验见 [assets.sha256](../assets.sha256)）；以 [闭环复评](../../evaluation/learning-loop-review-v0.2.md) 为业务说明。
 
 ## 1. 原型对应关系
 
