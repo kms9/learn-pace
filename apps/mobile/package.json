@@ -1,0 +1,8 @@
+{
+  "name": "@learn-pace/mobile",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "typecheck": "echo \"mobile Expo app scaffold pending M1 S1\""
+  }
+}

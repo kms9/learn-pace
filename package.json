@@ -1,0 +1,20 @@
+{
+  "name": "learn-pace",
+  "version": "0.1.0",
+  "private": true,
+  "packageManager": "pnpm@10.34.9",
+  "engines": {
+    "node": ">=22.0.0"
+  },
+  "scripts": {
+    "typecheck": "corepack pnpm -r typecheck",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:domain": "vitest run packages/domain"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.0",
+    "typescript": "^5.8.3",
+    "vitest": "^3.1.3"
+  }
+}

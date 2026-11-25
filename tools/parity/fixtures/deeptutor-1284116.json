@@ -1,0 +1,136 @@
+{
+  "upstream_commit": "1284116f92368480aef3a47f91b8df9e9b105062",
+  "mastery_cases": [
+    {
+      "input": [],
+      "expected": 0.0
+    },
+    {
+      "input": [
+        true
+      ],
+      "expected": 0.5
+    },
+    {
+      "input": [
+        true,
+        true
+      ],
+      "expected": 0.8
+    },
+    {
+      "input": [
+        true,
+        true,
+        true
+      ],
+      "expected": 1.0
+    },
+    {
+      "input": [
+        false,
+        true,
+        true
+      ],
+      "expected": 0.6964285714285715
+    },
+    {
+      "input": [
+        true,
+        false,
+        true,
+        true
+      ],
+      "expected": 0.7571428571428571
+    },
+    {
+      "input": [
+        false,
+        false,
+        true,
+        true,
+        true
+      ],
+      "expected": 0.7
+    },
+    {
+      "input": [
+        false,
+        false,
+        false,
+        true,
+        true,
+        true,
+        true,
+        true
+      ],
+      "expected": 1.0
+    },
+    {
+      "input": [
+        0.5,
+        0.8,
+        1.0
+      ],
+      "expected": 0.780357142857143
+    },
+    {
+      "input": [
+        1.5,
+        -0.2,
+        0.6,
+        0.9
+      ],
+      "expected": 0.62
+    }
+  ],
+  "scheduler_memory_trace": {
+    "t0": 1700000000.0,
+    "steps": [
+      {
+        "label": "pass_initial",
+        "moment": 1700000000.0,
+        "quality": 1.0,
+        "stability": 1.0958,
+        "difficulty": 0.264,
+        "next_review_at": 1700009975.2301843,
+        "review_count": 1,
+        "lapse_count": 0,
+        "scheduled_after_failure": false
+      },
+      {
+        "label": "pass_same_session",
+        "moment": 1700000060.0,
+        "quality": 1.0,
+        "stability": 1.0958,
+        "difficulty": 0.264,
+        "next_review_at": 1700009975.2301843,
+        "review_count": 2,
+        "lapse_count": 0,
+        "scheduled_after_failure": false
+      },
+      {
+        "label": "pass_at_due",
+        "moment": 1700009975.2301843,
+        "quality": 1.0,
+        "stability": 3.0478314498611083,
+        "difficulty": 0.22436564322556063,
+        "next_review_at": 1700037720.0926363,
+        "review_count": 3,
+        "lapse_count": 0,
+        "scheduled_after_failure": false
+      },
+      {
+        "label": "fail_at_due",
+        "moment": 1700037720.0926363,
+        "quality": 0.0,
+        "stability": 0.8941053011329587,
+        "difficulty": 0.38944176603851016,
+        "next_review_at": 1700045859.2660143,
+        "review_count": 4,
+        "lapse_count": 1,
+        "scheduled_after_failure": true
+      }
+    ]
+  }
+}
