@@ -22,3 +22,7 @@ export interface ApplicationHost {
 }
 
 export { StudyWorkbench, type StudySnapshot } from "./study-workbench.js";
+
+export {
+  AppBootstrapService, ModelSettingsError, curriculumProfiles, type BootstrapSnapshot,
+} from "./app-bootstrap.js";

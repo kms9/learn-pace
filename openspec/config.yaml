@@ -1,0 +1,27 @@
+schema: spec-driven
+
+context: |
+  Language: zh-CN
+  All artifacts must be written in zh-CN.
+  Keep OpenSpec structural headings and SHALL/MUST keywords in English.
+
+  Project: Learn Pace (local-first mobile personalized learning agent, P0 = LF01 + LF02, Android ARM64 first).
+  Tech stack: pnpm monorepo (corepack pnpm), Expo 58 + React Native 0.88.1 (Hermes), TypeScript strict, Vitest, expo-sqlite (WAL), expo-secure-store, @earendil-works/pi-durable@1.6.0 + @earendil-works/pi-ai@1.6.0.
+  Frozen decisions (D1-D7):
+  - D1: Open-source with explicit author permission to reuse Cherry Studio Mobile code/design.
+  - D2 & D4: Latest Pi Durable (1.6.0) as Agent Runtime; domain rules remain pure TS in @learn-pace/domain.
+  - D3: M2-A rapid main-flow phase does NOT use SQLite transaction/CAS/idempotency locks; those are added in M2-B hardening.
+  - D5: P0 only requires DeepSeek Flash (openai-completions, streaming + tool calling + JSON); never commit .env or API keys.
+  - D7: 4 Tabs (首页/问答/路径/我的), no learner self-reported mastery in P0, review failure follows DeepTutor scheduler (retention risk + remediation), text & quote attachments only in P0.
+  Architecture boundaries:
+  - packages/domain: pure TS rules (no RN/Expo/Pi/SQLite imports).
+  - packages/runtime: AgentRuntime port + PiDurableRuntime adapter.
+  - packages/infra: SQLite / SecureStore / Clock adapters.
+  - packages/app-host: Commands, Turn Coordinator, projections.
+  - apps/mobile: UI & navigation only; dispatches commands to app-host and renders projections.
+
+rules:
+  proposal:
+    - Always state explicit Non-Goals / Out of Scope (especially keeping M2-B transaction/CAS/backup hardening out of M2-A changes).
+  tasks:
+    - Group tasks into small verifiable steps with explicit package paths and test/typecheck verification commands (use `corepack pnpm`).

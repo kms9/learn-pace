@@ -9,3 +9,7 @@ patchedDependencies:
 
 # Keep patched paths compatible with Android Prefab.
 virtualStoreDirMaxLength: 40
+
+# Expo Router auto-resolves a React DOM peer. Keep it aligned with Expo's React version.
+overrides:
+  react-dom: 19.3.0
