@@ -95,3 +95,20 @@ export function schedulerForProgress(progress: LearningProgress): SpacedRepetiti
   }
   return new SpacedRepetitionScheduler({ interval_sequences: binding.intervals });
 }
+
+export function bindBuiltinReviewStrategy(progress: LearningProgress, templateId: string | null, now: number): LearningProgress {
+  const templates = builtinReviewTemplates();
+  if (templateId !== null && !Object.hasOwn(templates, templateId)) throw new RangeError("未知的复习策略");
+  const template = templateId === null ? undefined : templates[templateId];
+  const next = {
+    ...progress,
+    review_strategy: template ? {
+      template_id: template.template_id, name: template.name, builtin: template.builtin,
+      desired_retention: template.desired_retention, intervals: template.intervals,
+      bound_at: progress.review_strategy?.template_id === templateId ? progress.review_strategy.bound_at : now,
+    } : null,
+    repetition_states: Object.fromEntries(Object.entries(progress.repetition_states).map(([id, state]) => [id, { ...state }])),
+  };
+  schedulerForProgress(next).setDesiredRetention(next, template?.desired_retention ?? progress.desired_retention, now);
+  return next;
+}

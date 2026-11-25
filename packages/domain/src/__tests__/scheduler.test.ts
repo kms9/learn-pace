@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { createLearningEvidence, createLearningProgress } from "../models.js";
+import { bindBuiltinReviewStrategy } from "../review-strategy.js";
 import {
   INTERVAL_SEQUENCES,
   SpacedRepetitionScheduler,
@@ -132,5 +133,24 @@ describe("SpacedRepetitionScheduler (DeepTutor scheduler.py parity)", () => {
     expect(validateDesiredRetention(0.9)).toBe(0.9);
     expect(() => validateDesiredRetention(0.5)).toThrow(RangeError);
     expect(() => validateDesiredRetention(1.0)).toThrow(RangeError);
+  });
+
+  it("binds a built-in strategy, reschedules from the existing anchor, and preserves evidence on reset", () => {
+    const state = scheduler.getInitialState("procedure", { now: T0 });
+    scheduler.scheduleNext(state, "procedure", true, T0);
+    const original = createLearningProgress({ book_id: "path", knowledge_types: { kp: "procedure" }, repetition_states: { kp: state } });
+    const before = state.next_review_at;
+    const exam = bindBuiltinReviewStrategy(original, "preset-exam-cramming", T0 + 60);
+    expect(exam.review_strategy).toMatchObject({ template_id: "preset-exam-cramming", bound_at: T0 + 60 });
+    expect(exam.desired_retention).toBe(0.95);
+    expect(exam.review_queue[0]!.due_at).toBeLessThan(before);
+    expect(exam.repetition_states.kp).toMatchObject({ last_scheduled_at: T0, review_count: 1 });
+    expect(original.repetition_states.kp!.next_review_at).toBe(before);
+
+    const unbound = bindBuiltinReviewStrategy(exam, null, T0 + 120);
+    expect(unbound.review_strategy).toBeNull();
+    expect(unbound.desired_retention).toBe(0.95);
+    expect(unbound.review_queue[0]!.due_at).toBeGreaterThan(exam.review_queue[0]!.due_at);
+    expect(() => bindBuiltinReviewStrategy(original, "unknown", T0)).toThrow(RangeError);
   });
 });

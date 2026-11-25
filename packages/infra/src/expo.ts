@@ -14,6 +14,15 @@ export const expoSecretStore: SecretStore = {
 
 type InteractionRow = Omit<StoredInteraction, "question"> & { question: string };
 
+function decodeInteraction(row: InteractionRow): StoredInteraction {
+  const { _grade, ...question } = JSON.parse(row.question) as PendingQuestion & { _grade?: StoredInteraction["grade"] };
+  return { ...row, question, ...(_grade ? { grade: _grade } : {}) };
+}
+
+function encodeInteraction({ question, grade }: StoredInteraction): string {
+  return JSON.stringify(grade ? { ...question, _grade: grade } : question);
+}
+
 type MessageRow = Omit<StoredMessage, "metadata"> & { metadata: string | null };
 
 function decodeMessage(row: MessageRow): StoredMessage {
@@ -65,6 +74,10 @@ export class ExpoLearningStore implements AppStore {
     return rows.map(({ path_id }) => path_id);
   }
 
+  async delete(pathId: string): Promise<void> {
+    await this.db.runAsync("DELETE FROM learning_progress WHERE path_id = ?", pathId);
+  }
+
   async getOpenInteraction(pathId: string): Promise<StoredInteraction | null> {
     return this.readInteraction(`
       SELECT * FROM interactions WHERE path_id = ? AND status IN ('awaiting_input', 'answered')
@@ -85,7 +98,7 @@ export class ExpoLearningStore implements AppStore {
 
   private async readInteraction(query: string, ...params: string[]): Promise<StoredInteraction | null> {
     const row = await this.db.getFirstAsync<InteractionRow>(query, ...params);
-    return row ? { ...row, question: JSON.parse(row.question) as PendingQuestion } : null;
+    return row ? decodeInteraction(row) : null;
   }
 
   async insertInteraction(interaction: StoredInteraction): Promise<void> {
@@ -94,21 +107,44 @@ export class ExpoLearningStore implements AppStore {
         interaction_id, path_id, session_id, turn_id, status, question, raw_answer, submission_id, updated_at
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
     `, interaction.interaction_id, interaction.path_id, interaction.session_id, interaction.turn_id,
-    interaction.status, JSON.stringify(interaction.question), interaction.raw_answer,
+    interaction.status, encodeInteraction(interaction), interaction.raw_answer,
     interaction.submission_id, interaction.updated_at);
   }
 
   async saveAnswer(id: string, submissionId: string, rawAnswer: string, now: number): Promise<void> {
     await this.db.runAsync(`
       UPDATE interactions SET raw_answer = ?, submission_id = ?, status = 'answered', updated_at = ?
-      WHERE interaction_id = ?
+      WHERE interaction_id = ? AND status != 'abandoned'
     `, rawAnswer, submissionId, now, id);
   }
 
   async markGraded(id: string, now: number): Promise<void> {
     await this.db.runAsync(
-      "UPDATE interactions SET status = 'graded', updated_at = ? WHERE interaction_id = ?", now, id,
+      "UPDATE interactions SET status = 'graded', updated_at = ? WHERE interaction_id = ? AND status != 'abandoned'", now, id,
     );
+  }
+
+  async abandonInteraction(id: string, now: number): Promise<void> {
+    await this.db.runAsync(`UPDATE interactions SET status = 'abandoned', updated_at = ?
+      WHERE interaction_id = ? AND status IN ('awaiting_input', 'answered')`, now, id);
+  }
+
+  async deleteInteractionsByPath(pathId: string): Promise<void> {
+    await this.db.runAsync("DELETE FROM interactions WHERE path_id = ?", pathId);
+  }
+
+  async listInteractionsBySession(sessionId: string): Promise<StoredInteraction[]> {
+    const rows = await this.db.getAllAsync<InteractionRow>(
+      "SELECT * FROM interactions WHERE session_id = ? ORDER BY updated_at, interaction_id", sessionId,
+    );
+    return rows.map(decodeInteraction);
+  }
+
+  async updateInteraction(interaction: StoredInteraction): Promise<void> {
+    await this.db.runAsync(`UPDATE interactions SET status = ?, question = ?, raw_answer = ?, submission_id = ?, updated_at = ?
+      WHERE interaction_id = ? AND path_id = ? AND session_id = ?`, interaction.status, encodeInteraction(interaction),
+    interaction.raw_answer, interaction.submission_id, interaction.updated_at,
+    interaction.interaction_id, interaction.path_id, interaction.session_id);
   }
 
   async readSetting(name: string): Promise<string | null> {
@@ -141,6 +177,24 @@ export class ExpoLearningStore implements AppStore {
     return this.db.getAllAsync<StoredSession>("SELECT * FROM sessions ORDER BY updated_at DESC, session_id");
   }
 
+  async listSessionsByPath(pathId: string): Promise<StoredSession[]> {
+    return this.db.getAllAsync<StoredSession>(
+      "SELECT * FROM sessions WHERE path_id = ? ORDER BY updated_at DESC, session_id", pathId,
+    );
+  }
+
+  async updateSession(session: StoredSession): Promise<void> {
+    await this.db.runAsync(`UPDATE sessions SET kind = ?, path_id = ?, mode = ?, title = ?, model_id = ?,
+      created_at = ?, updated_at = ? WHERE session_id = ?`, session.kind, session.path_id, session.mode, session.title,
+    session.model_id, session.created_at, session.updated_at, session.session_id);
+  }
+
+  async deleteSessionsByPath(pathId: string, kind: string): Promise<void> {
+    await this.db.runAsync(`DELETE FROM messages WHERE session_id IN
+      (SELECT session_id FROM sessions WHERE path_id = ? AND kind = ?)`, pathId, kind);
+    await this.db.runAsync("DELETE FROM sessions WHERE path_id = ? AND kind = ?", pathId, kind);
+  }
+
   async getMessage(id: string): Promise<StoredMessage | null> {
     const row = await this.db.getFirstAsync<MessageRow>("SELECT * FROM messages WHERE message_id = ?", id);
     return row ? decodeMessage(row) : null;
@@ -163,18 +217,46 @@ export class ExpoLearningStore implements AppStore {
     return rows.map(decodeMessage);
   }
 
+  async deleteMessages(ids: readonly string[]): Promise<void> {
+    if (!ids.length) return;
+    await this.db.runAsync("DELETE FROM messages WHERE message_id IN (SELECT value FROM json_each(?))", JSON.stringify(ids));
+  }
+
   async getThread(id: string): Promise<StoredThread | null> {
     return this.db.getFirstAsync<StoredThread>("SELECT * FROM session_threads WHERE thread_id = ?", id);
   }
 
   async saveThread(thread: StoredThread): Promise<void> {
     await this.db.runAsync(`
-      INSERT INTO session_threads (thread_id, parent_session_id, source_message_id, selected_text, title, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT (thread_id) DO UPDATE SET
+      INSERT INTO session_threads (
+        thread_id, parent_session_id, source_message_id, selected_text, title, created_at, updated_at,
+        selection_start, selection_end, detached_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT (thread_id) DO UPDATE SET
         parent_session_id = excluded.parent_session_id, source_message_id = excluded.source_message_id,
-        selected_text = excluded.selected_text, title = excluded.title, created_at = excluded.created_at, updated_at = excluded.updated_at
+        selected_text = excluded.selected_text, title = excluded.title, created_at = excluded.created_at,
+        updated_at = excluded.updated_at, selection_start = excluded.selection_start,
+        selection_end = excluded.selection_end, detached_at = excluded.detached_at
     `, thread.thread_id, thread.parent_session_id, thread.source_message_id, thread.selected_text, thread.title,
-    thread.created_at, thread.updated_at);
+    thread.created_at, thread.updated_at, thread.selection_start, thread.selection_end, thread.detached_at);
+  }
+
+  async updateThread(thread: StoredThread): Promise<void> {
+    await this.db.runAsync(`
+      UPDATE session_threads SET parent_session_id = ?, source_message_id = ?, selected_text = ?, title = ?,
+        created_at = ?, updated_at = ?, selection_start = ?, selection_end = ?, detached_at = ?
+      WHERE thread_id = ?
+    `, thread.parent_session_id, thread.source_message_id, thread.selected_text, thread.title, thread.created_at,
+    thread.updated_at, thread.selection_start, thread.selection_end, thread.detached_at, thread.thread_id);
+  }
+
+  async deleteThread(id: string): Promise<void> {
+    await this.db.runAsync(`
+      DELETE FROM messages WHERE session_id = (SELECT thread_id FROM session_threads WHERE thread_id = ?)
+    `, id);
+    await this.db.runAsync(`
+      DELETE FROM sessions WHERE session_id = (SELECT thread_id FROM session_threads WHERE thread_id = ?)
+    `, id);
+    await this.db.runAsync("DELETE FROM session_threads WHERE thread_id = ?", id);
   }
 
   async listThreads(parentSessionId: string): Promise<StoredThread[]> {

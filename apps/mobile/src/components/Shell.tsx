@@ -1,14 +1,16 @@
 import { useRouter } from "expo-router";
-import type { ReactNode } from "react";
-import { Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
+import type { ComponentRef, ReactNode, Ref } from "react";
+import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useApp } from "../context/AppContext";
-import { colors, spacing } from "../theme";
+import { colors, radius, spacing } from "../theme";
 
-export function Page({ title, children, secondary = false }: { title: string; children: ReactNode; secondary?: boolean }) {
+export function Page({ title, children, secondary = false, keyboard = false, scrollRef }: {
+  title: string; children: ReactNode; secondary?: boolean; keyboard?: boolean; scrollRef?: Ref<ComponentRef<typeof ScrollView>>;
+}) {
   return (
     <SafeAreaView style={styles.screen} edges={secondary ? ["left", "right", "bottom"] : ["top", "left", "right"]}>
-      <ScrollView contentContainerStyle={styles.page} keyboardShouldPersistTaps="handled">
+      <ScrollView ref={scrollRef} contentContainerStyle={styles.page} keyboardShouldPersistTaps="handled" automaticallyAdjustKeyboardInsets={keyboard}>
         <Text accessibilityRole="header" style={styles.title}>{title}</Text>
         {children}
       </ScrollView>
@@ -54,16 +56,27 @@ export function ModelSetup() {
   );
 }
 
+export function LoadingCard({ label }: { label: string }) {
+  return <Card><View style={styles.loading}><ActivityIndicator color={colors.primary} /><Text style={styles.body}>{label}</Text></View></Card>;
+}
+
+export function RetryCard({ message, retry }: { message: string; retry: () => void }) {
+  return <Card><Text accessibilityRole="alert" style={styles.body}>{message}</Text>
+    <Action label="重试" onPress={retry} secondary />
+  </Card>;
+}
+
 export const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: colors.background },
   page: { flexGrow: 1, padding: spacing.md, gap: spacing.md },
   title: { color: colors.text, fontSize: 27, fontWeight: "700", marginBottom: spacing.xs },
   heading: { color: colors.text, fontSize: 17, fontWeight: "700" },
-  card: { padding: spacing.md, borderWidth: 1, borderColor: colors.border, backgroundColor: colors.surface, borderRadius: 14, gap: spacing.sm },
+  card: { padding: spacing.md, borderWidth: 1, borderColor: colors.border, backgroundColor: colors.surface, borderRadius: radius.card, gap: spacing.sm },
   body: { color: colors.muted, fontSize: 15, lineHeight: 22 },
   action: { minHeight: 44, padding: spacing.sm, alignItems: "center", justifyContent: "center", borderRadius: 9, backgroundColor: colors.primary },
   actionLabel: { color: colors.surface, fontSize: 15, fontWeight: "600" },
   secondaryAction: { backgroundColor: colors.soft },
   secondaryLabel: { color: colors.primary },
   disabled: { opacity: 0.45 },
+  loading: { flexDirection: "row", alignItems: "center", gap: spacing.sm },
 });

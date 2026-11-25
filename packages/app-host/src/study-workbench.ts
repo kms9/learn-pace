@@ -32,7 +32,8 @@ export class StudyWorkbench implements ApplicationHost {
 
   constructor(
     config: ModelConfig,
-    private readonly store: LearningProgressStore & InteractionStore,
+    private readonly store: Pick<LearningProgressStore, "get" | "save"> &
+      Pick<InteractionStore, "getOpenInteraction" | "getInteraction" | "insertInteraction" | "saveAnswer" | "markGraded">,
     private readonly clock: Clock,
     private readonly makeId: () => string,
     fetch?: typeof globalThis.fetch,

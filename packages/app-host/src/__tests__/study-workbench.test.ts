@@ -1,6 +1,6 @@
 import { expect, it } from "vitest";
 import { createPendingQuestion, type LearningProgress } from "@learn-pace/domain";
-import type { InteractionStore, LearningProgressStore, StoredInteraction } from "@learn-pace/infra";
+import type { StoredInteraction } from "@learn-pace/infra";
 import { StudyWorkbench } from "../index.js";
 
 it("restores the public card, saves the answer before grading and resumes an incomplete assessment", async () => {
@@ -27,13 +27,12 @@ it("restores the public card, saves the answer before grading and resumes an inc
   let progress: LearningProgress | null = null;
   let interrupt = true;
   const writes: string[] = [];
-  const store: LearningProgressStore & InteractionStore = {
+  const store: ConstructorParameters<typeof StudyWorkbench>[1] = {
     async get() { return structuredClone(progress); },
     async save(value) {
       progress = structuredClone(value);
       if (value.learning_evidence.length) writes.push("progress");
     },
-    async listIds() { return progress ? [progress.book_id] : []; },
     async getOpenInteraction() { return interaction.status !== "graded" ? interaction : null; },
     async getInteraction() { return interaction; },
     async insertInteraction(value) { interaction = value; },

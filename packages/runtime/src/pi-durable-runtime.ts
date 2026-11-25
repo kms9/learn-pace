@@ -1,4 +1,5 @@
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
+import type { Message } from "@earendil-works/pi-ai";
 import {
   AssistantEntry,
   createRegistry,
@@ -24,6 +25,8 @@ export interface RuntimeTool {
   name: string;
   description: string;
   parameters: Record<string, unknown>;
+  privateArgs?: boolean;
+  termination?(output: JsonValue): { question?: PublicPendingQuestion } | undefined;
   execute(
     args: Record<string, unknown>,
     context: { sessionId: string; turnId: string; pathId?: string; mode?: RuntimeTurnRequest["mode"]; signal: AbortSignal },
@@ -90,6 +93,7 @@ export class PiDurableRuntime implements AgentRuntime {
 
     let harness: Harness | undefined;
     let publicQuestion: PublicPendingQuestion | undefined;
+    let toolTerminated = false;
     let failure = "Pi Durable turn failed";
     let terminal: TerminalEvent;
     try {
@@ -106,13 +110,24 @@ export class PiDurableRuntime implements AgentRuntime {
       let questionAttempted = false;
       let registrationInFlight = false;
       const model = toPiModel(this.config);
+      const history = request.history?.map(({ role, content }): Message => role === "user"
+        ? { role, content, timestamp: 0 }
+        : {
+          role, content: [{ type: "text", text: content }], timestamp: 0,
+          api: model.api, provider: model.provider, model: model.id, stopReason: "stop",
+          usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0,
+            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
+        }) ?? [];
       const models = createTurnModels(model, this.config.apiKey, (delta) => {
         // A tool call can arrive after text in the same response. Hold text on question-capable
         // turns so an answer printed before a call cannot reach the learner.
         if (!register) emit({ type: "text_delta", delta });
         else if (!questionAttempted) bufferedText.push(delta);
-      }, (message) => { failure = message; }, this.fetch);
-      const tools = [...this.tools.values()].filter((tool) => allowed.has(tool.name)).map((tool) =>
+      }, (message) => { failure = message; }, this.fetch, request.onModelRound);
+      const offered = [...this.tools.values()].filter((tool) => allowed.has(tool.name));
+      const hasTerminator = offered.some((tool) => tool.termination);
+      let toolQueue: Promise<unknown> = Promise.resolve();
+      const tools = offered.map((tool) =>
         defineTool({
           name: tool.name,
           description: tool.description,
@@ -120,14 +135,30 @@ export class PiDurableRuntime implements AgentRuntime {
           replay: "unsafe",
           async execute(args: unknown, { callId }, context) {
             const toolSignal = context.abortSignal ? AbortSignal.any([signal, context.abortSignal]) : signal;
-            toolSignal.throwIfAborted();
-            const input = args as Record<string, unknown>;
-            emit({ type: "tool_call", toolName: tool.name, callId, args: input });
-            toolSignal.throwIfAborted();
-            const output = await tool.execute(input, { sessionId, turnId, pathId, mode, signal: toolSignal });
-            toolSignal.throwIfAborted();
-            emit({ type: "tool_result", toolName: tool.name, callId, output });
-            return { output: [{ type: "text", text: JSON.stringify(output) }] };
+            const execute = async () => {
+              toolSignal.throwIfAborted();
+              if (toolTerminated) throw new Error("A tool already ended the turn");
+              const input = args as Record<string, unknown>;
+              emit({ type: "tool_call", toolName: tool.name, callId, args: tool.privateArgs ? {} : input });
+              toolSignal.throwIfAborted();
+              const output = await tool.execute(input, { sessionId, turnId, pathId, mode, signal: toolSignal });
+              const termination = tool.termination?.(output);
+              if (termination) {
+                toolTerminated = true;
+                publicQuestion = termination.question;
+              } else {
+                toolSignal.throwIfAborted();
+              }
+              emit({ type: "tool_result", toolName: tool.name, callId, output });
+              return {
+                output: [{ type: "text" as const, text: JSON.stringify(output) }],
+                ...(termination ? { control: { terminate: true as const } } : {}),
+              };
+            };
+            if (!hasTerminator) return execute();
+            const result = toolQueue.then(execute);
+            toolQueue = result.catch(() => {});
+            return result;
           },
         }),
       );
@@ -171,6 +202,12 @@ export class PiDurableRuntime implements AgentRuntime {
         tasks: [finishQuestionRound],
         hooks: [
           hook(GenerationTask, {
+            beforeRequest({ messages }) {
+              if (!history.length) return;
+              const firstInput = messages.findIndex(({ role }) => role !== "system");
+              if (firstInput < 0) return;
+              return { messages: [...messages.slice(0, firstInput), ...history, ...messages.slice(firstInput)] };
+            },
             afterResponse(message) {
               const questionCall = register && message.content.find(
                 (part) => part.type === "toolCall" && part.name === registerQuestionName,
@@ -181,7 +218,7 @@ export class PiDurableRuntime implements AgentRuntime {
                 bufferedText.length = 0;
               }
             },
-            afterTools: () => publicQuestion ? { tasks: [hookTask(finishQuestionRound, null)] } : undefined,
+            afterTools: () => publicQuestion || toolTerminated ? { tasks: [hookTask(finishQuestionRound, null)] } : undefined,
           }),
           hook(ToolTask, {
             beforeTool(call) {
@@ -200,13 +237,17 @@ export class PiDurableRuntime implements AgentRuntime {
         registry,
         settings: { retry: { enabled: false }, compaction: { enabled: false } },
       }, BACKGROUND_CONTEXT);
+      const instructions = [
+        request.instructions,
+        register ? "When presenting a question, call register_question directly. Keep the answer in expected_answer and wait for learner input." : undefined,
+      ].filter(Boolean).join("\n\n");
       const root = await harness.root(BACKGROUND_CONTEXT, {
         agent: {
           model: { provider: model.provider, modelId: model.id },
           thinkingLevel: this.config.reasoning ?? "off",
           extensions: [extension],
-          maxTurns: 8,
-          ...(register ? { instructions: "When presenting a question, call register_question directly. Keep the answer in expected_answer and wait for learner input." } : {}),
+          maxTurns: request.maxTurns ?? 8,
+          ...(instructions ? { instructions } : {}),
         },
       });
       signal.throwIfAborted();
@@ -261,6 +302,8 @@ export class PiDurableRuntime implements AgentRuntime {
     if (publicQuestion) {
       onEvent({ type: "question_presented", question: publicQuestion });
       terminal = { type: "turn_completed", stopReason: "question_presented" };
+    } else if (toolTerminated) {
+      terminal = { type: "turn_completed", stopReason: "tool_terminated" };
     } else if (signal.aborted) {
       terminal = { type: "turn_completed", stopReason: "cancelled" };
     }

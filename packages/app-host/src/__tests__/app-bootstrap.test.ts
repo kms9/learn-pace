@@ -16,7 +16,7 @@ function harness(fetch?: typeof globalThis.fetch) {
   return { store, secrets, open };
 }
 
-it("loads an unconfigured app with saved local records and persists scene changes", async () => {
+it("loads an unconfigured app with saved local records and leaves the legacy scene setting intact", async () => {
   const { store, open } = harness();
   await store.save(createLearningProgress({ book_id: "path", name: "Stored path" }));
   await store.saveSession({
@@ -35,15 +35,15 @@ it("loads an unconfigured app with saved local records and persists scene change
     }),
   });
 
+  await store.writeSetting("curriculum_profile", "middle");
+  const reads = vi.spyOn(store, "readSetting");
   const initial = await open().snapshot();
-  expect(initial.curriculumProfile).toBeNull();
+  expect(initial).not.toHaveProperty("curriculumProfile");
+  expect(reads).not.toHaveBeenCalledWith("curriculum_profile");
   expect(initial.model.configured).toBe(false);
   expect(initial.pending?.question).not.toHaveProperty("expected_answer");
-  await open().saveCurriculumProfile("free");
-  expect((await open().snapshot()).curriculumProfile).toBe("free");
-  await open().saveCurriculumProfile("middle");
+  expect(await store.readSetting("curriculum_profile")).toBe("middle");
   const restored = await open().snapshot();
-  expect(restored.curriculumProfile).toBe("middle");
   expect(restored.paths).toEqual(initial.paths);
   expect(restored.sessions).toEqual(initial.sessions);
   expect(await open().readSessionHistory("chat")).toEqual([

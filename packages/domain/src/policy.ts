@@ -139,6 +139,25 @@ export function isMastered(progress: LearningProgress, kp: KnowledgePoint): bool
   return Boolean(masterySource(progress, kp));
 }
 
+export function derivePathStatus(progress: LearningProgress): "draft" | "active" | "completed" {
+  const points = progress.modules.flatMap((module) => module.knowledge_points);
+  if (!points.length) return "draft";
+  return points.every((point) => isMastered(progress, point)) ? "completed" : "active";
+}
+
+// Adapted from DeepTutor service.reset_path (1284116), Apache-2.0.
+export function resetProgress(progress: LearningProgress, now: number): LearningProgress {
+  return {
+    ...progress, diagnostic: null, current_stage: "diagnostic", current_kp_index: 0,
+    current_module_id: [...progress.modules].sort((a, b) => a.order - b.order)[0]?.id ?? "",
+    mastery_levels: {}, qualitative_mastery: {}, deferred_objectives: {}, learner_mastery_overrides: {},
+    quiz_attempts: [], error_records: [], learning_evidence: [], lesson_evidence: {}, assessment_evidence: {},
+    source_exposures: [], repetition_states: {}, review_queue: [], explained_objectives: {}, pending_question: null,
+    feynman_retries: {}, feynman_explanations: {}, stage_failure_counts: {}, stage_failure_notes: {},
+    version: progress.version + 1, updated_at: now,
+  };
+}
+
 export function displayMastery(progress: LearningProgress, kp: KnowledgePoint): number {
   if (QUALITATIVE_TYPES.has(kp.type) && progress.qualitative_mastery[kp.id]) {
     return QUALITATIVE_PASS_DISPLAY;
@@ -151,7 +170,7 @@ export function objectiveStatus(progress: LearningProgress, kp: KnowledgePoint):
     return "mastered";
   }
   const seen =
-    progress.quiz_attempts.some((a) => a.knowledge_point_id === kp.id) ||
+    progress.quiz_attempts.some((a) => a.knowledge_point_id === kp.id && !a.voided) ||
     Object.prototype.hasOwnProperty.call(progress.qualitative_mastery, kp.id);
   return seen ? "learning" : "new";
 }

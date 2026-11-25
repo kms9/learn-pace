@@ -1,6 +1,10 @@
+import { createPendingQuestion, publicPendingQuestion } from "@learn-pace/domain";
 import { afterEach, expect, it, vi } from "vitest";
 import {
+  assessSemantically,
+  exactVerdict,
   gradeQualitatively,
+  validateStudyQuestion,
   loadModelConfigFromEnv,
   PiDurableRuntime,
   type RegisterQuestionHandler,
@@ -73,6 +77,28 @@ it("maps actual Pi SSE chunks to ordered runtime deltas and one completion", asy
   });
 });
 
+it("sends system instructions, ordered history and the current question once with no tools", async () => {
+  const fetch = mockDeepSeek(completion([text("Second answer")]));
+  const runtime = new PiDurableRuntime(modelConfig);
+  runtime.registerTool({ name: "hidden", description: "Unavailable", parameters: {}, execute: async () => null });
+  await collect(runtime, {
+    ...request,
+    instructions: "Answer in Chinese.",
+    history: [
+      { role: "user", content: "First question" },
+      { role: "assistant", content: "First answer" },
+    ],
+  });
+  const body = JSON.parse(String(fetch.mock.calls[0]?.[1]?.body));
+  expect(body.messages).toEqual([
+    expect.objectContaining({ role: "system", content: expect.stringContaining("Answer in Chinese.") }),
+    expect.objectContaining({ role: "user", content: "First question" }),
+    expect.objectContaining({ role: "assistant", content: "First answer" }),
+    expect.objectContaining({ role: "user", content: "Prompt" }),
+  ]);
+  expect(body.tools ?? []).toEqual([]);
+});
+
 it("does not present truncation as success", async () => {
   mockDeepSeek(completion([text("partial")], "length"));
   expect(await collect(new PiDurableRuntime(modelConfig))).toEqual([
@@ -128,8 +154,15 @@ it("registers one private question, emits the domain card, and ends the entire t
   const sibling = vi.fn(async () => null);
   const runtime = new PiDurableRuntime(modelConfig, register);
   runtime.registerTool({ name: "sibling", description: "Another tool", parameters: { type: "object" }, execute: sibling });
-  const events = await collect(runtime, { ...questionRequest, allowedTools: ["register_question", "sibling"] });
+  const events = await collect(runtime, {
+    ...questionRequest, instructions: "Use the learner's language.", allowedTools: ["register_question", "sibling"],
+  });
   expect(fetch).toHaveBeenCalledTimes(1);
+  const body = JSON.parse(String(fetch.mock.calls[0]?.[1]?.body));
+  expect(body.messages[0]).toMatchObject({
+    role: "system",
+    content: expect.stringContaining("Use the learner's language.\n\nWhen presenting a question, call register_question directly."),
+  });
   expect(register).toHaveBeenCalledTimes(1);
   expect(register).toHaveBeenCalledWith(expect.objectContaining({
     type: "RegisterQuestion", path_id: "path", session_id: "session", turn_id: "turn",
@@ -180,7 +213,10 @@ it.each(["signal", "cancelTurn"])("aborts the live provider via %s", async (mech
   const runtime = new PiDurableRuntime(modelConfig);
   const abort = new AbortController();
   const events: RuntimeEvent[] = [];
-  await runtime.runTurn({ ...request, signal: abort.signal }, (event) => {
+  await runtime.runTurn({
+    ...request, signal: abort.signal,
+    history: [{ role: "user", content: "Earlier question" }, { role: "assistant", content: "Earlier answer" }],
+  }, (event) => {
     events.push(event);
     if (event.type === "text_delta") {
       if (mechanism === "signal") abort.abort();
@@ -223,3 +259,59 @@ it.each(["not JSON", JSON.stringify({ ...grade, score: 2 }), JSON.stringify({ ..
     await expect(gradeQualitatively(modelConfig, gradeRequest)).rejects.toThrow(/invalid/i);
   },
 );
+
+const decimalQuiz = createPendingQuestion({ question_id: "q2", knowledge_point_id: "kp1",
+  prompt: "化成小数", question_type: "short", expected_answer: "0.50", accepted_answers: ["0.5", "ONE HALF"] });
+
+it("uses exact stored choice and accepted short answers without a model request", async () => {
+  const fetch = vi.fn<typeof globalThis.fetch>();
+  const choice = createPendingQuestion({ ...question, expected_answer: "B" });
+  expect(await assessSemantically(modelConfig, { question: choice, learner_answer: "我选 B" }, fetch))
+    .toMatchObject({ result: "correct", final: true, confidence: 1 });
+  expect(exactVerdict(choice, "A 或 B")).toMatchObject({ result: "ungraded", final: false });
+  expect(await assessSemantically(modelConfig, { question: decimalQuiz, learner_answer: "  One Half " }, fetch))
+    .toMatchObject({ result: "correct", final: true });
+  expect(fetch).not.toHaveBeenCalled();
+});
+
+it("uses an injected transport and treats 0.8 as final, passing through criteria and feedback", async () => {
+  const fetch = vi.fn<typeof globalThis.fetch>().mockResolvedValue(completion([text(JSON.stringify({
+    result: "partial", confidence: 0.8, feedback: "缺少依据", criteria_met: ["可公约"], reference_answer: "0.5",
+  }))]));
+  const assessment = await assessSemantically(modelConfig, { question: decimalQuiz, learner_answer: "大概是 0.5" }, fetch);
+  expect(assessment).toMatchObject({ result: "partial", confidence: 0.8, final: true, criteria_met: ["可公约"] });
+  const payload = JSON.parse(String(fetch.mock.calls[0]?.[1]?.body));
+  expect(payload.response_format).toEqual({ type: "json_object" });
+  expect(JSON.parse(payload.messages.at(-1).content).learner_answer).toBe("大概是 0.5");
+});
+
+it("withholds solution fields on a low-confidence result and rejects invalid assessment JSON", async () => {
+  const fetch = vi.fn<typeof globalThis.fetch>().mockResolvedValueOnce(completion([text(JSON.stringify({
+    result: "partial", confidence: 0.7, feedback: "参考解答", reference_answer: "参考解答", criteria_met: ["依据"],
+  }))])).mockResolvedValueOnce(completion([text("invalid json")]));
+  const input = { criteria: { objective: "最大公因数", module_objective: "约分" }, learner_answer: "原话" };
+  const result = await assessSemantically(modelConfig, input, fetch);
+  expect(result).toMatchObject({ result: "ungraded", final: false, confidence: 0.7 });
+  expect(JSON.stringify(result)).not.toContain("参考解答");
+  await expect(assessSemantically(modelConfig, input, fetch)).rejects.toThrow("invalid assessment JSON");
+});
+
+it("validates and shuffles a question group with private answers at every level", () => {
+  let id = 0;
+  const input = { knowledge_point_id: "kp", question_type: "group" as const, question: "请计算", questions: [
+    { question_type: "choice" as const, question: "选一项", options: ["正确正文", "干扰项"], expected_answer: "正确正文",
+      explanation: "私有解析" },
+    { question_type: "short" as const, question: "写数字", expected_answer: "314159", accepted_answers: ["3.14159"] },
+  ] };
+  const checked = validateStudyQuestion(input, () => String(++id), 1, () => 0);
+  expect(checked.questions[0]).toMatchObject({ knowledge_point_id: "kp", expected_answer: "B", options: [
+    { label: "A", body: "干扰项" }, { label: "B", body: "正确正文" },
+  ] });
+  const visible = JSON.stringify(publicPendingQuestion(checked));
+  for (const secretField of ["expected_answer", "accepted_answers", "explanation", "私有解析", "314159", "3.14159"]) {
+    expect(visible).not.toContain(secretField);
+  }
+  expect(() => validateStudyQuestion({ ...input, questions: input.questions.slice(0, 1) }, () => "x", 1)).toThrow(/两至四/);
+  expect(() => validateStudyQuestion({ ...input, questions: [{ ...input.questions[0]!, options: ["相同", "相同"] }, input.questions[1]!] },
+    () => "x", 1)).toThrow(/不同选项/);
+});

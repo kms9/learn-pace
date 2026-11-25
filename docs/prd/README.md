@@ -4,13 +4,15 @@
 
 本目录按职责拆分 V0.1 与 V0.2 复评。保留 [V0.1 历史原稿](archive/Learn-Pace-PRD-v0.1.md)，历史原稿中的缺图描述是当时状态，不是 V0.2 当前结论。后续以本目录与 [V0.2 复评](../evaluation/learning-loop-review-v0.2.md) 为拟议基线，先评审待决项，再进入实施。无 App 功能已验收。
 
+**V0.3 方向（2026-11-25 确认）**：产品目标调整为「打开应用即是 DeepTutor 的手机版」。问答与精通之路两条流程的交互结构、导师行为、术语和视觉对齐 DeepTutor `1284116`，本地优先、DeepSeek Flash 与 Android 的工程边界不变。01、02、03、04、06、07、09 已按[DeepTutor 手机版复刻方案](../evaluation/deeptutor-mobile-parity-plan-v0.3.md)更新；与本方案冲突的 V0.2 原型（D03–D07、D09、D10 等）仅作视觉历史参考。
+
 | 文档 | 内容 |
 | --- | --- |
 | [00](00-product-scope.md) | 产品目标及 P0 范围 |
-| [01](01-information-architecture.md) | P00–P07 与 4 Tab |
-| [02](02-page-layout-interaction.md) | 页面需求、交互、异常状态 |
-| [03](03-lf01-exploration-flow.md) | LF01 |
-| [04](04-lf02-mastery-flow.md) | LF02、状态机、评估、复习 |
+| [01](01-information-architecture.md) | P01–P07 与 4 Tab（学习 / 问答 / 精通之路 / 我的） |
+| [02](02-page-layout-interaction.md) | 页面需求、精通会话三种模式、异常状态 |
+| [03](03-lf01-exploration-flow.md) | LF01 问答与小老师 |
+| [04](04-lf02-mastery-flow.md) | LF02 精通之路、状态、评估、复习 |
 | [05](05-domain-model.md) | 领域对象和身份关系 |
 | [06](06-agent-runtime-contract.md) | Runtime 与 Domain 边界 |
 | [07](07-data-flow.md) | 命令、回执、数据流 |
@@ -20,7 +22,7 @@
 ## 决策与来源
 
 - **已确认工程决策（2026-11-24）**：项目开源并获 Cherry Studio App 作者明确授权，可直接复用/参考其可用代码与设计；Agent Runtime 主选最新版 Pi Durable；首期模型仅需确保接入 DeepSeek Flash（OpenAI-completions 兼容，支持 streaming / tool calling / JSON）；快速推进期先不使用事务控制，完成 LF01/LF02 主流程后再补齐事务/CAS/幂等与恢复加固。详见[可行性评估与实施方案](../evaluation/feasibility-and-plan-v0.2.md)。
-- **已冻结 P0 产品规则（2026-11-24）**：采用 4 Tab 导航（首页/问答/路径/我的）；P0 不做自报掌握；复习失败策略与 DeepTutor `scheduler` 一致（掌握与保持分开记，失败标保持风险并生成补救任务）；首期附件仅支持文本与选文。公开面向未成年人上线前另行评估隐私合规。详见[实施路线](../roadmap.md)和[原型索引](../design/README.md)。
+- **已冻结 P0 产品规则（2026-11-24，2026-11-25 修订）**：采用 4 Tab 导航（学习 / 问答 / 精通之路 / 我的），默认打开「问答」；不设学习场景选择（原 P00 移除）；与 DeepTutor 一致提供自报掌握，来源与系统评估分开显示、不产生测评证据；复习作答与学习作答走同一评分管线，复习独立答错使掌握回落、回到学习补救（与 DeepTutor 评分与调度一致）；首期附件仅支持文本与选文。公开面向未成年人上线前另行评估隐私合规。详见[复刻方案 §2.3](../evaluation/deeptutor-mobile-parity-plan-v0.3.md)、[实施路线](../roadmap.md)和[原型索引](../design/README.md)。
 
 ## 14. 参考来源与版本
 

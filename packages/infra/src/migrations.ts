@@ -4,7 +4,7 @@ interface MigrationDatabase {
   getAllAsync<T>(sql: string): Promise<T[]>;
 }
 
-const schemaVersion = 2;
+const schemaVersion = 4;
 
 export async function migrateLearningDatabase(db: MigrationDatabase): Promise<void> {
   await db.execAsync("PRAGMA journal_mode = WAL");
@@ -12,6 +12,48 @@ export async function migrateLearningDatabase(db: MigrationDatabase): Promise<vo
   if (version > schemaVersion) throw new Error("数据库版本高于当前应用支持的版本");
   if (version === schemaVersion) return;
 
+  if (version < 2) await migrateV2(db);
+  if (version < 3) await migrateV3(db);
+  await migrateV4(db);
+}
+
+async function migrateV3(db: MigrationDatabase): Promise<void> {
+  const threadColumns = new Set((await db.getAllAsync<{ name: string }>("PRAGMA table_info(session_threads)"))
+    .map(({ name }) => name));
+  const newColumns = { selection_start: "INTEGER", selection_end: "INTEGER", detached_at: "REAL" };
+  for (const [name, type] of Object.entries(newColumns)) {
+    if (!threadColumns.has(name)) await db.execAsync(`ALTER TABLE session_threads ADD COLUMN ${name} ${type}`);
+  }
+  await db.execAsync("PRAGMA user_version = 3");
+}
+
+async function migrateV4(db: MigrationDatabase): Promise<void> {
+  const current = await db.getFirstAsync<{ sql: string }>("SELECT sql FROM sqlite_schema WHERE name = 'interactions'");
+  if (!current?.sql.includes("'abandoned'")) {
+    await db.execAsync(`CREATE TABLE IF NOT EXISTS interactions_v4 (
+      interaction_id TEXT PRIMARY KEY NOT NULL, path_id TEXT NOT NULL,
+      session_id TEXT NOT NULL, turn_id TEXT NOT NULL,
+      status TEXT NOT NULL CHECK (status IN ('awaiting_input', 'answered', 'graded', 'abandoned')),
+      question TEXT NOT NULL, raw_answer TEXT, submission_id TEXT, updated_at REAL NOT NULL
+    )`);
+    if (current) {
+      await db.execAsync(`INSERT OR REPLACE INTO interactions_v4
+        (interaction_id, path_id, session_id, turn_id, status, question, raw_answer, submission_id, updated_at)
+        SELECT interaction_id, path_id, session_id, turn_id, status, question, raw_answer, submission_id, updated_at
+        FROM interactions`);
+      await db.execAsync("DROP TABLE interactions");
+    }
+    await db.execAsync("ALTER TABLE interactions_v4 RENAME TO interactions");
+  }
+  await db.execAsync(`
+    CREATE INDEX IF NOT EXISTS interactions_by_path ON interactions (path_id, updated_at);
+    CREATE INDEX IF NOT EXISTS interactions_open_by_update ON interactions (updated_at DESC, interaction_id)
+      WHERE status IN ('awaiting_input', 'answered');
+    PRAGMA user_version = ${schemaVersion};
+  `);
+}
+
+async function migrateV2(db: MigrationDatabase): Promise<void> {
   await db.execAsync(`
     CREATE TABLE IF NOT EXISTS learning_progress (
       path_id TEXT PRIMARY KEY NOT NULL,
@@ -89,6 +131,6 @@ export async function migrateLearningDatabase(db: MigrationDatabase): Promise<vo
     );
     CREATE INDEX IF NOT EXISTS threads_by_parent
       ON session_threads (parent_session_id, created_at, thread_id);
-    PRAGMA user_version = ${schemaVersion};
+    PRAGMA user_version = 2;
   `);
 }

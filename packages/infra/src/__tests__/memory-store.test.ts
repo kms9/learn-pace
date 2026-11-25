@@ -62,6 +62,7 @@ it("orders messages and preserves the parent message anchor for child sessions",
   const thread = {
     thread_id: "child", parent_session_id: "parent", source_message_id: "a",
     selected_text: "ratios", title: "Little Tutor", created_at: 4, updated_at: 4,
+    selection_start: 8, selection_end: 14, detached_at: null,
   };
   await store.saveThread(thread);
 
@@ -70,4 +71,38 @@ it("orders messages and preserves the parent message anchor for child sessions",
   expect(await store.getMessage("a")).toEqual(message);
   expect(await store.listThreads("parent")).toEqual([thread]);
   expect(await store.getSession("child")).toMatchObject({ kind: "thread" });
+  const detached = { ...thread, detached_at: 5, updated_at: 5 };
+  await store.updateThread(detached);
+  await store.deleteMessages(["a", "missing"]);
+  expect(await store.getThread("child")).toEqual(detached);
+  expect((await store.listMessages("parent")).map((item) => item.message_id)).toEqual(["b"]);
+  await store.deleteThread("child");
+  await store.updateThread(detached);
+  expect(await store.listThreads("parent")).toEqual([]);
+  expect(await store.getSession("child")).toBeNull();
+  expect(await store.listMessages("child")).toEqual([]);
+  expect(await store.getSession("parent")).toEqual(session);
+});
+
+it("abandons open cards and deletes only sessions and messages with the specified path and kind", async () => {
+  const store = new MemoryAppStore();
+  const question = createPendingQuestion({ question_id: "q", knowledge_point_id: "kp" });
+  await store.insertInteraction({ interaction_id: "i", path_id: "p", session_id: "s", turn_id: "t",
+    status: "answered", question, raw_answer: "raw", submission_id: "sub", updated_at: 1 });
+  await store.abandonInteraction("i", 2);
+  expect(await store.getOpenInteraction("p")).toBeNull();
+  expect(await store.getInteraction("i")).toMatchObject({ status: "abandoned", raw_answer: "raw" });
+  await store.deleteInteractionsByPath("p");
+  expect(await store.getInteraction("i")).toBeNull();
+  const session = { session_id: "s", kind: "mastery", path_id: "p", mode: "outline" as const, title: "t",
+    model_id: null, created_at: 1, updated_at: 1 };
+  await store.saveSession(session);
+  await store.saveSession({ ...session, session_id: "lf01", kind: "lf01" });
+  await store.updateSession({ ...session, mode: "study" });
+  expect(await store.getSession("s")).toMatchObject({ mode: "study" });
+  await store.saveMessage({ message_id: "m", session_id: "s", role: "user", content: "data", status: "committed",
+    turn_id: "turn", metadata: null, created_at: 1 });
+  await store.deleteSessionsByPath("p", "mastery");
+  expect((await store.listSessionsByPath("p")).map(({ session_id }) => session_id)).toEqual(["lf01"]);
+  expect(await store.listMessages("s")).toEqual([]);
 });

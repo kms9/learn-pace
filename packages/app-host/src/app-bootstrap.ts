@@ -1,19 +1,12 @@
-import { publicPendingQuestion, type CurriculumProfileId, type PendingInteractionView } from "@learn-pace/domain";
+import { publicPendingQuestion, type PendingInteractionView } from "@learn-pace/domain";
 import { systemClock, type AppStore, type PathSummaryRecord, type SecretStore, type StoredSession } from "@learn-pace/infra";
 import { loadModelConfigFromEnv, PiDurableRuntime, type ModelConfig } from "@learn-pace/runtime";
 import { StudyWorkbench } from "./study-workbench.js";
+import { Lf01ChatService } from "./lf01-chat.js";
+import { MasterySessionService } from "./mastery/session-service.js";
 
-const sceneSetting = "curriculum_profile";
 const modelSetting = "deepseek-model-config";
 const legacyKey = "deepseek-api-key";
-
-export const curriculumProfiles = [
-  { id: "primary", label: "小学" },
-  { id: "middle", label: "初中" },
-  { id: "high", label: "高中" },
-  { id: "exam_self_study", label: "考证 / 自学" },
-  { id: "free", label: "自由" },
-] as const satisfies readonly { id: CurriculumProfileId; label: string }[];
 
 export type PublicModelSettings = Omit<ModelConfig, "apiKey">;
 type StoredModelSettings = PublicModelSettings & { credentialRef: string };
@@ -21,7 +14,6 @@ type ModelSettingsInput = Pick<ModelConfig, "baseUrl"> &
   Partial<Pick<ModelConfig, "model" | "reasoning" | "apiKey" | "contextWindow" | "maxTokens">>;
 
 export interface BootstrapSnapshot {
-  curriculumProfile: CurriculumProfileId | null;
   model: { settings: PublicModelSettings | null; configured: boolean };
   paths: PathSummaryRecord[];
   sessions: StoredSession[];
@@ -57,6 +49,7 @@ function probeFailure(runtimeError: string | undefined): string {
 }
 
 export class AppBootstrapService {
+  private mastery?: MasterySessionService;
   constructor(
     private readonly store: AppStore,
     private readonly secrets: SecretStore,
@@ -64,15 +57,13 @@ export class AppBootstrapService {
   ) {}
 
   async snapshot(): Promise<BootstrapSnapshot> {
-    const [savedScene, model, paths, sessions, pending] = await Promise.all([
-      this.store.readSetting(sceneSetting),
+    const [model, paths, sessions, pending] = await Promise.all([
       this.modelSettings(),
       this.store.listPathSummaries(),
       this.store.listSessions(),
       this.store.getLatestOpenInteraction(),
     ]);
     return {
-      curriculumProfile: curriculumProfiles.find(({ id }) => id === savedScene)?.id ?? null,
       model,
       paths,
       sessions,
@@ -85,10 +76,6 @@ export class AppBootstrapService {
         question: publicPendingQuestion(pending.question),
       },
     };
-  }
-
-  async saveCurriculumProfile(profile: CurriculumProfileId): Promise<void> {
-    await this.store.writeSetting(sceneSetting, profile);
   }
 
   async readSessionHistory(sessionId: string) {
@@ -124,6 +111,16 @@ export class AppBootstrapService {
     const { credentialRef, ...settings } = record;
     const apiKey = (await this.secrets.getItem(credentialRef))?.trim();
     return apiKey ? { ...settings, apiKey } : null;
+  }
+
+  createLf01ChatService(clock = systemClock): Lf01ChatService {
+    return new Lf01ChatService(this.store, clock, this.transport.makeId, () => this.getModelConfig(), this.transport.fetch);
+  }
+
+  createMasterySessionService(clock = systemClock): MasterySessionService {
+    return this.mastery ??= new MasterySessionService(
+      this.store, clock, this.transport.makeId, () => this.getModelConfig(), this.transport.fetch,
+    );
   }
 
   async saveModelSettings(input: ModelSettingsInput): Promise<void> {

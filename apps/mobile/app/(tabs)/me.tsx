@@ -1,7 +1,7 @@
-import { ModelSettingsError, curriculumProfiles } from "@learn-pace/app-host";
+import { ModelSettingsError } from "@learn-pace/app-host";
 import { useRouter } from "expo-router";
 import { useEffect, useRef, useState } from "react";
-import { StyleSheet, Text, TextInput } from "react-native";
+import { Keyboard, StyleSheet, Text, TextInput } from "react-native";
 import { importUsbConfiguration } from "../../src/configuration";
 import { Action, Card, Page, styles } from "../../src/components/Shell";
 import { useApp } from "../../src/context/AppContext";
@@ -11,7 +11,7 @@ const defaultModel = "openai/deepseek-v4.1-flash";
 type Feedback = { message: string; failed?: boolean };
 
 export default function Settings() {
-  const { service, snapshot, reload } = useApp();
+  const { service, snapshot, reload, devClock } = useApp();
   const router = useRouter();
   const saved = snapshot.model.settings;
   const [baseUrl, setBaseUrl] = useState(saved?.baseUrl ?? "");
@@ -20,8 +20,8 @@ export default function Settings() {
   const [code, setCode] = useState("");
   const [busy, setBusy] = useState(false);
   const [feedback, setFeedback] = useState<Feedback>();
+  const [clockDays, setClockDays] = useState(() => String(devClock?.days ?? 0));
   const running = useRef(false);
-  const scene = curriculumProfiles.find(({ id }) => id === snapshot.curriculumProfile)?.label;
 
   useEffect(() => {
     setBaseUrl(saved?.baseUrl ?? "");
@@ -59,11 +59,7 @@ export default function Settings() {
   }
 
   return (
-    <Page title="我的">
-      <Card title="学习场景">
-        <Text style={styles.body}>{scene ?? "自由"}</Text>
-        <Action label="切换学习场景" onPress={() => router.push({ pathname: "/onboarding/scene", params: { source: "settings" } })} secondary />
-      </Card>
+    <Page title="我的" keyboard>
       <Card title="DeepSeek Flash">
         <Text style={styles.body}>{snapshot.model.configured ? "已配置" : "尚未配置"}</Text>
         <Text style={styles.body}>网关地址</Text>
@@ -122,6 +118,17 @@ export default function Settings() {
           />
           <Action label="通过 USB 导入" disabled={busy || !/^\d{6}$/.test(code)} onPress={() => void perform(() => save("usb"))} secondary />
           <Action label="打开 M1 验证工作台" onPress={() => router.push("/dev/m1-workbench")} secondary />
+          <Action label="S7 导师循环验证" onPress={() => router.push("/dev/s7-tutor-loop")} secondary />
+          {devClock && <>
+            <Text style={styles.body}>时钟偏移（天）</Text>
+            <TextInput accessibilityLabel="时钟偏移（天）" style={form.input} value={clockDays} onChangeText={setClockDays}
+              keyboardType="numbers-and-punctuation" maxLength={7} selectTextOnFocus />
+            <Action label="应用时钟偏移" disabled={!/^-?\d+$/.test(clockDays)} onPress={() => {
+              Keyboard.dismiss();
+              devClock.setDays(Number(clockDays));
+            }} secondary />
+            <Text accessibilityLiveRegion="polite" style={styles.body}>{`当前偏移 ${devClock.days} 天，重启后归零`}</Text>
+          </>}
         </Card>
       )}
     </Page>

@@ -12,7 +12,8 @@ context: |
   - D2 & D4: Latest Pi Durable (1.6.0) as Agent Runtime; domain rules remain pure TS in @learn-pace/domain.
   - D3: M2-A rapid main-flow phase does NOT use SQLite transaction/CAS/idempotency locks; those are added in M2-B hardening.
   - D5: P0 only requires DeepSeek Flash (openai-completions, streaming + tool calling + JSON); never commit .env or API keys.
-  - D7: 4 Tabs (首页/问答/路径/我的), no learner self-reported mastery in P0, review failure follows DeepTutor scheduler (retention risk + remediation), text & quote attachments only in P0.
+  - D7 (revised 2026-11-25): 4 Tabs (学习/问答/精通之路/我的), default tab 问答; no P00 learning-scene selection; learner self-reported mastery is supported as in DeepTutor (separate source, no assessed evidence, reversible); review failure follows DeepTutor service/scheduler (independent review failure drops mastery back to learning/remediation while preserving history; assisted answers preserve mastery with 0.6 quality cap); no answer-hint button and no review settlement page; text & quote attachments only in P0.
+  - D8 (2026-11-25): Product goal is "DeepTutor on a phone". Replicate DeepTutor 1284116 chat + Mastery Path interaction, tutor tool loop (mastery_* tools gated by session mode outline/study/review), terminology (web/locales/zh/app.json) and visual theme. Upstream reference: upstream/deeptutor. Plan: docs/evaluation/deeptutor-mobile-parity-plan-v0.3.md.
   Architecture boundaries:
   - packages/domain: pure TS rules (no RN/Expo/Pi/SQLite imports).
   - packages/runtime: AgentRuntime port + PiDurableRuntime adapter.

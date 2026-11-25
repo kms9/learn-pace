@@ -2,6 +2,8 @@
 
 V0.2 为当前拟议交互与数据修订参考。原始 V0.1 保留作视觉历史；原型不是可运行 App，也不等于端到端测试通过。
 
+> **2026-11-25**：产品方向调整为复刻 DeepTutor 手机版，交互以 [复刻方案](../evaluation/deeptutor-mobile-parity-plan-v0.3.md) 与 DeepTutor `1284116` 源码为准。以下 V0.2 页面组与新基线冲突，仅作视觉历史参考：D02（理解反馈、引用回主会话）、D03（大纲确认按钮）、D04–D05Q（提示按钮、独立复测页面）、D06（复习队列与结算）、D09（首页统计卡）、D10（场景选择与原 P04 表单）、D11-B（提示按钮）。后续补 DeepTutor 风格的手机端原型。
+
 - [V0.2 HTML 原型（全部 41 状态）](v0.2/prototype.html)：下载并在浏览器打开，GitHub 不直接执行 HTML。
 - [V0.2 闭环复评](../evaluation/learning-loop-review-v0.2.md)。
 - [V0.1 原型校验](v0.1/README.md)。

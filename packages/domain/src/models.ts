@@ -89,6 +89,7 @@ export interface DiagnosticResult {
 export type AssessmentResultKind = "correct" | "partial" | "incorrect";
 
 export interface QuizAttempt {
+  evidence_id?: string;
   question_id: string;
   knowledge_point_id: string;
   module_id: string;
@@ -242,10 +243,23 @@ export interface LearnerProfile {
   updated_at: number;
 }
 
+export interface TopicSource {
+  id: string;
+  kind: "goal" | "chat" | "text_note";
+  label: string;
+  excerpt: string;
+  source_session_id?: string;
+  source_message_id?: string;
+  created_at: number;
+}
+
 export interface LearningProgress {
   book_id: string;
   learner_profile: LearnerProfile | null;
   name: string;
+  goal?: string;
+  emoji?: string;
+  topic_sources?: TopicSource[];
   diagnostic: DiagnosticResult | null;
   modules: LearningModule[];
   current_module_id: string;
@@ -285,6 +299,9 @@ export function createLearningProgress(
   return {
     learner_profile: null,
     name: "",
+    goal: "",
+    emoji: "🧭",
+    topic_sources: [],
     diagnostic: null,
     modules: [],
     current_module_id: "",

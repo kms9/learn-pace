@@ -38,6 +38,10 @@ export class MemoryAppStore implements AppStore {
     return [...this.paths.keys()].sort(byId);
   }
 
+  async delete(pathId: string): Promise<void> {
+    this.paths.delete(pathId);
+  }
+
   async listPathSummaries(): Promise<PathSummaryRecord[]> {
     return [...this.paths.values()]
       .map(({ progress, status }) => ({
@@ -59,7 +63,8 @@ export class MemoryAppStore implements AppStore {
 
   private latestOpenInteraction(pathId?: string): StoredInteraction | null {
     const latest = [...this.interactions.values()]
-      .filter((item) => item.status !== "graded" && (pathId === undefined || item.path_id === pathId))
+      .filter((item) => (item.status === "awaiting_input" || item.status === "answered") &&
+        (pathId === undefined || item.path_id === pathId))
       .sort((a, b) => b.updated_at - a.updated_at || byId(a.interaction_id, b.interaction_id))[0];
     return structuredClone(latest ?? null);
   }
@@ -77,14 +82,36 @@ export class MemoryAppStore implements AppStore {
 
   async saveAnswer(id: string, submissionId: string, rawAnswer: string, now: number): Promise<void> {
     const item = this.interactions.get(id);
-    if (item) Object.assign(item, {
+    if (item && item.status !== "abandoned") Object.assign(item, {
       raw_answer: rawAnswer, submission_id: submissionId, status: "answered", updated_at: now,
     });
   }
 
   async markGraded(id: string, now: number): Promise<void> {
     const item = this.interactions.get(id);
-    if (item) Object.assign(item, { status: "graded", updated_at: now });
+    if (item && item.status !== "abandoned") Object.assign(item, { status: "graded", updated_at: now });
+  }
+
+  async abandonInteraction(id: string, now: number): Promise<void> {
+    const item = this.interactions.get(id);
+    if (item?.status === "awaiting_input" || item?.status === "answered") {
+      Object.assign(item, { status: "abandoned", updated_at: now });
+    }
+  }
+
+  async deleteInteractionsByPath(pathId: string): Promise<void> {
+    for (const [id, item] of this.interactions) if (item.path_id === pathId) this.interactions.delete(id);
+  }
+
+  async listInteractionsBySession(sessionId: string): Promise<StoredInteraction[]> {
+    return structuredClone([...this.interactions.values()].filter((item) => item.session_id === sessionId)
+      .sort((a, b) => a.updated_at - b.updated_at || byId(a.interaction_id, b.interaction_id)));
+  }
+
+  async updateInteraction(interaction: StoredInteraction): Promise<void> {
+    const current = this.interactions.get(interaction.interaction_id);
+    if (current?.path_id !== interaction.path_id || current.session_id !== interaction.session_id) return;
+    this.interactions.set(interaction.interaction_id, structuredClone({ ...interaction, turn_id: current.turn_id }));
   }
 
   async getSession(id: string): Promise<StoredSession | null> {
@@ -98,6 +125,23 @@ export class MemoryAppStore implements AppStore {
   async listSessions(): Promise<StoredSession[]> {
     return structuredClone([...this.sessions.values()]
       .sort((a, b) => b.updated_at - a.updated_at || byId(a.session_id, b.session_id)));
+  }
+
+  async listSessionsByPath(pathId: string): Promise<StoredSession[]> {
+    return (await this.listSessions()).filter(({ path_id }) => path_id === pathId);
+  }
+
+  async updateSession(session: StoredSession): Promise<void> {
+    if (this.sessions.has(session.session_id)) await this.saveSession(session);
+  }
+
+  async deleteSessionsByPath(pathId: string, kind: string): Promise<void> {
+    const ids = new Set((await this.listSessionsByPath(pathId)).filter((item) => item.kind === kind)
+      .map(({ session_id }) => session_id));
+    for (const message of this.messages.values()) {
+      if (ids.has(message.session_id)) this.messages.delete(message.message_id);
+    }
+    for (const id of ids) this.sessions.delete(id);
   }
 
   async getMessage(id: string): Promise<StoredMessage | null> {
@@ -114,12 +158,29 @@ export class MemoryAppStore implements AppStore {
       .sort((a, b) => a.created_at - b.created_at || byId(a.message_id, b.message_id)));
   }
 
+  async deleteMessages(ids: readonly string[]): Promise<void> {
+    for (const id of ids) this.messages.delete(id);
+  }
+
   async getThread(id: string): Promise<StoredThread | null> {
     return structuredClone(this.threads.get(id) ?? null);
   }
 
   async saveThread(thread: StoredThread): Promise<void> {
     this.threads.set(thread.thread_id, structuredClone(thread));
+  }
+
+  async updateThread(thread: StoredThread): Promise<void> {
+    if (this.threads.has(thread.thread_id)) await this.saveThread(thread);
+  }
+
+  async deleteThread(id: string): Promise<void> {
+    if (!this.threads.has(id)) return;
+    for (const message of this.messages.values()) {
+      if (message.session_id === id) this.messages.delete(message.message_id);
+    }
+    this.sessions.delete(id);
+    this.threads.delete(id);
   }
 
   async listThreads(parentSessionId: string): Promise<StoredThread[]> {

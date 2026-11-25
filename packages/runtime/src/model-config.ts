@@ -8,6 +8,10 @@ export interface ModelConfig {
   maxTokens: number;
 }
 
+export function requestModelId(config: ModelConfig): string {
+  return config.model.replace(/^openai\//, "");
+}
+
 export function loadModelConfigFromEnv(
   env: Record<string, string | undefined>,
 ): ModelConfig {

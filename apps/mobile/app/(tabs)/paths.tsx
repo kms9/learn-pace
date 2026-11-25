@@ -1,25 +1,37 @@
 import { useRouter } from "expo-router";
+import { useCallback } from "react";
 import { Text } from "react-native";
+import { Action, Card, LoadingCard, ModelSetup, Page, RetryCard, styles } from "../../src/components/Shell";
+import { MasteryProgress } from "../../src/components/MasteryOutline";
 import { useApp } from "../../src/context/AppContext";
-import { Action, Card, ModelSetup, Page, styles } from "../../src/components/Shell";
-
-const labels = { draft: "草稿", active: "进行中", completed: "已完成", archived: "已归档" };
+import { useMasteryProjection } from "../../src/context/useMasteryProjection";
 
 export default function Paths() {
-  const { snapshot } = useApp();
+  const { mastery } = useApp();
   const router = useRouter();
+  const read = useCallback(() => mastery.listTopics(), [mastery]);
+  const observe = useCallback((refresh: () => void) => mastery.observeChanges(refresh), [mastery]);
+  const { data: topics, error, retry } = useMasteryProjection(read, observe);
+  const due = topics?.reduce((sum, item) => sum + item.dueCount, 0) ?? 0;
+  const firstDue = topics?.find(({ dueCount }) => dueCount > 0);
 
-  return (
-    <Page title="路径">
-      <ModelSetup />
-      <Action label="创建学习目标" onPress={() => router.push("/path/new")} />
-      {snapshot.paths.length === 0 && <Card><Text style={styles.body}>暂无学习路径。</Text></Card>}
-      {snapshot.paths.map(({ path_id, name, status }) => (
-        <Card key={path_id} title={name || "未命名路径"}>
-          <Text style={styles.body}>{labels[status]}</Text>
-          <Action label="打开路径" onPress={() => router.push({ pathname: "/path/[pathId]/workbench", params: { pathId: path_id } })} secondary />
-        </Card>
-      ))}
-    </Page>
-  );
+  return <Page title="精通之路">
+    <Action label="新建精通目标" onPress={() => router.push("/mastery/new")} />
+    {firstDue && <Action label={`${due} 项待复习`} onPress={() => router.push({
+      pathname: "/mastery/[pathId]/session/[sessionId]", params: { pathId: firstDue.id, sessionId: "new", mode: "review" },
+    })} />}
+    {error !== undefined && <RetryCard message="无法读取精通目标" retry={retry} />}
+    {!topics && error === undefined && <LoadingCard label="正在读取精通目标…" />}
+    {topics?.length === 0 && <Card>
+      <Text style={styles.body}>还没有精通目标。新建一个，和导师一起定下大纲。</Text>
+    </Card>}
+    {topics?.map((topic) => (
+      <Card key={topic.id} title={topic.emoji + " " + topic.name}>
+        <MasteryProgress {...topic} />
+        <Action label={topic.status === "draft" ? "去定大纲" : "打开精通之路"}
+          onPress={() => router.push({ pathname: "/mastery/[pathId]", params: { pathId: topic.id } })} secondary />
+      </Card>
+    ))}
+    <ModelSetup />
+  </Page>;
 }

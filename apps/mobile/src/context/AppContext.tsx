@@ -1,13 +1,19 @@
-import { AppBootstrapService, type BootstrapSnapshot } from "@learn-pace/app-host";
+import { AppBootstrapService, LearningHomeService, type BootstrapSnapshot, type Lf01ChatService, type MasterySessionService } from "@learn-pace/app-host";
+import { systemClock, type Clock } from "@learn-pace/infra";
 import { ExpoLearningStore, expoSecretStore } from "@learn-pace/infra/expo";
 import { randomUUID } from "expo-crypto";
 import { fetch as expoFetch } from "expo/fetch";
-import { createContext, useContext, useEffect, useState, type ReactNode } from "react";
+import { createContext, useContext, useEffect, useRef, useState, type ReactNode } from "react";
 import { ActivityIndicator, Button, StyleSheet, Text, View } from "react-native";
 import { colors, spacing } from "../theme";
 
 type AppContextValue = {
   service: AppBootstrapService;
+  chat: Lf01ChatService;
+  mastery: MasterySessionService;
+  learningHome: LearningHomeService;
+  clock: Clock;
+  devClock?: { days: number; setDays: (days: number) => void };
   snapshot: BootstrapSnapshot;
   reload: () => Promise<void>;
   inspectDatabase: () => ReturnType<ExpoLearningStore["inspect"]>;
@@ -25,9 +31,14 @@ function openStorage(): Promise<ExpoLearningStore> {
 }
 
 export function AppProvider({ children }: { children: ReactNode }) {
-  const [data, setData] = useState<AppContextValue | null>(null);
+  const [data, setData] = useState<Omit<AppContextValue, "clock" | "devClock"> | null>(null);
   const [failed, setFailed] = useState(false);
   const [attempt, setAttempt] = useState(0);
+  const offset = useRef(0);
+  const [days, setDays] = useState(0);
+  const [clock] = useState<Clock>(() => __DEV__
+    ? { nowSeconds: () => systemClock.nowSeconds() + offset.current * 86_400 }
+    : systemClock);
 
   useEffect(() => {
     let mounted = true;
@@ -37,19 +48,24 @@ export function AppProvider({ children }: { children: ReactNode }) {
         makeId: randomUUID,
         fetch: expoFetch as unknown as typeof globalThis.fetch,
       });
+      const chat = service.createLf01ChatService(clock);
+      const mastery = service.createMasterySessionService(clock);
+      const learningHome = new LearningHomeService(store, clock);
+      await chat.recoverInterruptedTurns();
+      await mastery.recoverInterruptedTurns();
       const snapshot = await service.snapshot();
       if (!mounted) return;
       const reload = async () => {
         const latest = await service.snapshot();
         if (mounted) setData((current) => current && { ...current, snapshot: latest });
       };
-      setData({ service, snapshot, reload, inspectDatabase: () => store.inspect() });
+      setData({ service, chat, mastery, learningHome, snapshot, reload, inspectDatabase: () => store.inspect() });
     }
     void open().catch(() => {
       if (mounted) setFailed(true);
     });
     return () => { mounted = false; };
-  }, [attempt]);
+  }, [attempt, clock]);
 
   if (!data) {
     return (
@@ -69,7 +85,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
     );
   }
 
-  return <AppContext.Provider value={data}>{children}</AppContext.Provider>;
+  const devClock = __DEV__ ? { days, setDays: (next: number) => { offset.current = next; setDays(next); } } : undefined;
+  return <AppContext.Provider value={{ ...data, clock, devClock }}>{children}</AppContext.Provider>;
 }
 
 export function useApp() {

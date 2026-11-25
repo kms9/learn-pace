@@ -2,13 +2,14 @@ import type { AssistantMessage, Model, ProviderStreams } from "@earendil-works/p
 import { lazyStream } from "@earendil-works/pi-ai/api/lazy";
 import { streamSimple } from "@earendil-works/pi-ai/api/openai-completions";
 import { createModels, createProvider } from "@earendil-works/pi-ai/models";
-import type { ModelConfig } from "./model-config.js";
+import type { RuntimeModelRound } from "./index.js";
+import { requestModelId, type ModelConfig } from "./model-config.js";
 
 export function toPiModel(config: ModelConfig): Model<"openai-completions"> {
   return {
     provider: "deepseek",
     // The configured openai/ prefix is a namespace. This gateway lists the bare model ID.
-    id: config.model.replace(/^openai\//, ""),
+    id: requestModelId(config),
     name: config.model,
     api: config.apiType,
     baseUrl: config.baseUrl,
@@ -35,21 +36,44 @@ export function createTurnModels(
   onDelta: (delta: string) => void,
   onProviderFailure: (message: string) => void,
   fetch?: typeof globalThis.fetch,
+  onModelRound?: (round: RuntimeModelRound) => void,
 ) {
   // Bind the credential only at the request boundary. The model and transcript carry no key.
   const stream: ProviderStreams["streamSimple"] = (_model, context, options) =>
     lazyStream(model, async () => {
-      const source = streamSimple(model, context, { ...options, apiKey, fetch: fetch ?? options?.fetch, maxRetries: 0 });
+      const transport = fetch ?? options?.fetch;
+      let httpStatus: number | undefined;
+      const observedFetch: typeof globalThis.fetch = async (input, init) => {
+        const response = await (transport ?? globalThis.fetch)(input, init);
+        httpStatus = response.status;
+        return response;
+      };
+      const source = streamSimple(model, context, {
+        ...options, apiKey, fetch: onModelRound ? observedFetch : transport, maxRetries: 0,
+      });
       return (async function* () {
-        for await (const event of source) {
-          if (event.type === "text_delta" && !options?.signal?.aborted) onDelta(event.delta);
-          if (event.type === "error") {
-            const message = providerFailure(event.error);
-            onProviderFailure(message);
-            yield { ...event, error: { ...event.error, errorMessage: message, diagnostics: undefined } };
-          } else {
-            yield event;
+        let last: AssistantMessage | undefined;
+        try {
+          for await (const event of source) {
+            if (event.type === "text_delta" && !options?.signal?.aborted) onDelta(event.delta);
+            if (event.type === "done") last = event.message;
+            if (event.type === "error") {
+              last = event.error;
+              const message = providerFailure(event.error);
+              onProviderFailure(message);
+              yield { ...event, error: { ...event.error, errorMessage: message, diagnostics: undefined } };
+            } else {
+              yield event;
+            }
           }
+        } finally {
+          onModelRound?.({
+            httpStatus,
+            promptTokens: last?.usage.totalTokens ? last.usage.input + last.usage.cacheRead + last.usage.cacheWrite : undefined,
+            completionTokens: last?.usage.totalTokens ? last.usage.output : undefined,
+            stopReason: last?.stopReason,
+            toolCalls: last?.content.flatMap((part) => part.type === "toolCall" ? [{ id: part.id, name: part.name }] : []) ?? [],
+          });
         }
       })();
     }, undefined, options?.signal);
