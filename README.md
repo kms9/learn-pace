@@ -114,6 +114,7 @@ git status
 - [原型设计](docs/design/README.md)：V0.1 原型校验、V0.2 12 组 / 41 状态的自包含 HTML。
 - [学习闭环复评](docs/evaluation/learning-loop-review-v0.2.md)：主路径已具备设计覆盖；异常交互及真实工程验证仍待完成。
 - [实施路线与 Gate](docs/roadmap.md)。
+- [可行性评估与实施方案](docs/evaluation/feasibility-and-plan-v0.2.md)：上游许可证/Runtime 核对、风险与 M0–M3 实施计划。
 
 当前基线为拟议设计 V0.2，尚待产品评审冻结；原始 PNG 待补传，不视为已同步。三个上游源码引用保持不变。
 
