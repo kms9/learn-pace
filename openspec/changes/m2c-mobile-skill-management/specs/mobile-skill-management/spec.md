@@ -30,3 +30,15 @@
 #### Scenario: A package requires an unavailable Node script
 - **WHEN** 用户查看或选择含 Node 脚本的 Skill
 - **THEN** 应用提示只能阅读而不能执行，缺少能力时不得声称流程已成功
+
+
+### Requirement: Independent package, scope and tool eligibility
+The application SHALL distinguish package validity, enabled scope and required capability readiness. Skill metadata or identity MUST NOT register a tool, create a connection or grant credentials. Unsupported or unknown dependencies SHALL be visible; the mobile application does not offer arbitrary script execution.
+
+#### Scenario: Imported package claims a privileged connector name
+- **WHEN** a valid package advertises a capability not registered or authorized by the Host
+- **THEN** installation does not grant the capability; its readiness is shown as unmet and the model cannot invoke it
+
+#### Scenario: Automatic and explicit invocation differ
+- **WHEN** a package disables model invocation or explicit user invocation
+- **THEN** the corresponding discovery or composer path is excluded without granting the other path additional authority

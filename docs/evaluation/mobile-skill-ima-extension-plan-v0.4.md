@@ -183,3 +183,53 @@ Connection/Binding 持久化只存公开描述和 credential_ref；保密项独�
 ## 9. 决策与未验证事项
 
 建议采用 M2-C 命名、P1 范围、只读 ima、单设备无额外后端、LF01 先验证再 LF02、SQLite 小包和新备份版本、手工导入/公开 GitHub 而非市场。这些为本次设计建议，未替用户冻结；若需完全复刻 Cherry 的安装市场/对话创建，需要扩展后续范围。真实 ima 凭证、官方发布版本的所有脚本、各类型知识库权限/限额、Android 解析与真机模型自动加载尚未联调；不承诺订阅库全文或全量第三方 Skill 可执行。上游授权来自仓库 D1，具体迁移文件仍需按 NOTICE/许可证审查。当前只提交方案与首个待评审 Change，不提交业务实现，不修改 main 或归档历史。
+
+
+## 10. 实施校准与后续扩展契约（基线复核 `401cd47`）
+
+本节补足 §4–§8 的实施歧义，不改变已提出的第10→11→12竖切顺序，不创建后续 Change。仍为待评审设计。以 Cherry Mobile 固定提交的 Skill service、SkillScope、skillTools、RuntimeTool/ToolRef 边界为参照，而非将其全量产品能力迁入。
+
+### 10.1 两类 Skill、三项独立授权与后续接入
+
+| 类型 | 例子 | 安装后如何可用 |
+|---|---|---|
+| 指令型 Skill | 苏格拉底提问、费曼检查、学习摘要 | 标准 SKILL.md + 文本 references，启用并绑定学习场景；无外部能力时仍可工作 |
+| 连接型 Skill | ima 知识库；未来其它知识库或远程 MCP | 同一包管理机制；依赖 Host 已注册的可信 capability；用户另行配置连接、授权具体资料范围 |
+
+**安装包 ≠ 启用 Skill ≠ 授权外部连接/工具。** 三者分别保存状态。任何第三方包不能以名称、origin、allowed-tools、metadata 或 instructions 冒充内置连接器。包支持标准 Agent Skills；若需依赖声明，可读取标准 allowed-tools 及 compatibility，Host 自有可信 capability descriptor 解析稳定 ID 与可用性，未知声明仅作提示，不执行任意脚本或任意 HTTP。第10项仅落地必要的 Skill scope/依赖就绪态及可信工具目录接口，不建设通用动态插件 SDK；第11项才注册真正的 ima Provider 及知识工具。
+
+建议区分 `SkillPackage` / `InstalledSkill` / `SkillBinding`（流程、启用） / `ToolDescriptor`（稳定 capability ID、参数 schema、实现、模式准入） / `ProviderConnection`（provider 类型、credential_ref、连接状态） / `SourceBinding`（用户选中的库） / `TurnExtensionScope`（不可变版本、允许调用的工具与资料绑定）。ToolRef 未来按来源分区，MCP 身份使用 serverId + rawToolName，模型可见别名由 Host 生成，不用别名作为授权身份。首期不实现 MCP。
+
+后续新增一个知识库扩展，原则上只需：实现 KnowledgeProvider 接口和 transport → 注册可信 descriptor 与连接配置/能力探测 → 提供可选移动兼容 Skill → 运行通用 provider conformance 与真机验收。LF01、LF02、Pi Runtime、掌握算法不新增厂商分支。仅有 SKILL.md 不能凭空获得新网络执行能力；可执行新 connector 仍需可信应用代码或将来单独评审的远程 MCP 机制。是否允许新 provider 写入须独立设计审批，不在此契约默认开放。
+
+### 10.2 产品交互与状态：管理与学习入口分离
+
+- 「我的 → 技能」：列表 / 导入预览 / 详情 / 启用 / LF01、Dito 绑定 / 更新 / 卸载；导入支持本地 SKILL.md、ZIP、公开 GitHub URL。查看包时展示已安装、已启用、当前场景可用、依赖缺失四类事实，安装成功不等于可执行。首期不引入市场、Agent CRUD、自由脚本、对话自动安装。
+- 「我的 → 知识库」（第11项）：创建连接、测试凭据、分页发现库、选择只读库、查看状态、重新连接/断开；连接就绪、已绑定库与单次查询成功分别显示。连接断开不删除远端内容。
+- LF01 composer 独立提供「技能」和「知识库」选择；Skill chip 存 ID+revision，知识库 chip 存 binding ID，发送后固定本轮范围。小老师只继承父会话实际授权的范围，不扩大权限；变更选择只影响后续轮。
+- ima-knowledge 由应用提供只读移动兼容包，沿用通用安装/启用/调用与版本收据。首次配置可向用户明确提示启用；用户选择知识库是授权本轮资料范围，不自动安装或启用第三方 Skill。若已启用且允许 model invocation，可依据检索意图自动装配；若禁用自动调用，只允许符合 user-invocable 的显式选择。不把选择库变相当作绕过 invocation flag。知识工具本身由 Host 决定，不能由 Skill 授权；选择库但未启用 ima-knowledge 时，可使用 Host 的基础检索/来源规范，但不得宣称 Skill 已执行。
+- 无库/无技能仍能完成原 LF01/LF02；仅知识库模式与普通问答有显式差异，检索失败不自动降级冒充资料回答。
+
+### 10.3 现有源码中必须处理的三个 Runtime 边界
+
+1. **准备失败与重试**：`packages/app-host/src/chat-turns.ts` 的 generate 当前只保留 VersionConflictError，其他 prepare 错误被折叠为 undefined。第10项应引入脱敏类型化 ExtensionPrepareError（revision_missing / scope_denied / dependency_missing / unsupported_model 等），明确 terminal 与 UI 恢复动作；不得静默换 Skill 版本或返回泛化模型故障。重试/重新生成复核保存的显式选择；自动加载记录实际 revision，历史收据不是新的自动授权。
+2. **收据不是回答**：当前 end_turn 在 content 或 replyMetadata 存在时可标 committed。扩展收据（selected / loaded / dependency_missing / failed / cancelled）与业务可交付物分离；只出现 Skill/检索收据不应使空回答成功。保留现有 handoff/题卡的结构化终止语义。每个已完成的加载/读取保存轻量收据（turnId、stable ID、revision、状态，不保存凭据或全部原始结果），活跃工具在强杀后为 interrupted/unknown，不能伪造成功；成功/失败/取消终态与内容对齐。持久化 checkpoint 不得以旧 metadata 覆盖已提交的收据。
+3. **同轮预算和竞争**：`pi-durable-runtime.ts` 的普通工具可能并发运行（仅存在 termination 时串行），默认 maxTurns=8；用每轮 shared budget/原子预留约束并发 load、reference、search、read，不能让并发绕过 3 Skills/24k 字符等上限。显式选择优先只注入已启用固定版本，自动发现仅提供有限描述、再 load；应用政策始终优先。原有 register_question / afterTools / beforeTool 终止和 allowlist 不改。若自动发现+加载+查询超过模型预算，返回明确不足，测试实际轮数和 token；必要时先交付显式调用，不宣称自动模式已通过。
+
+### 10.4 第11项需冻结的知识来源契约（不提前生成详细 specs）
+
+| 层次 | 权威事实 |
+|---|---|
+| Connection | 是否已配置、服务端探测、认证/限流错误；凭据只进受控 transport |
+| Binding | 用户实际选中且授权的 remoteKbId，允许的操作范围只读 |
+| Retrieval / SourceLedger | 每次搜索的 ready/partial/no_matches 等状态、实际文本、稳定 media ID、绑定及请求预算；只有真实可读内容可成为引用 |
+| Answer | 经 Host 检查的真实 sourceId、用户看到的回答与有界快照；不能把标题当正文 |
+| Learning evidence | LF02 的真实作答、评分、独立性和掌握度；知识库证据永不等同于学习证据 |
+
+Provider conformance 至少覆盖分页/重复 cursor、查询限制、browse 与 search 区分、已授权库内 source handle、read 可用性/partial、业务 envelope 与 HTTP 状态、取消/超时、撤权、错误映射、引用可核验；fake provider 与 ima transport mock 共用合同测试，避免抽象只适用于 ima。真实库验证建议准备用户自建测试库，放一条独特、非敏感的事实并记录来源：无库基线不应知道该事实；选库+已启用 Skill 后必须有真实 load/search/read（需要全文时）收据，并且答案与可核验来源相符。另用不同库的反例验证不跨库，确认无匹配、无正文、拒绝读、断网、取消、凭据无效及断开后无新请求。真实账户的可列/可搜/可读范围与限额分开记录。
+
+现有 ChatTurns.boundedHistory、Lf01ChatService.parentTranscript、选文、handoff 会将历史文本再次装配给模型；仅撤销 source handle 不会阻止已生成文本自动出网。第11项应在 Host 统一 provenance 检查：将外部来源关联到受影响的消息/摘要，授权撤销或备份恢复未重连时，自动历史/父会话上下文默认排除受影响内容（可保留本地显示与脱敏占位），不自动把旧正文通过普通模型请求再次外发；用户主动引用历史文本时显示数据流向并由用户明确选择，不能声称能识别所有人工复制的文本。第一期不做跨会话全文缓存；引用快照有界，备份大小预检。日志、运行时事件、异常、模型请求、导入文件、备份均须验证无真实凭据及无签名 URL。
+
+### 10.5 第10项实施前的复核门槛
+
+第10项仍是唯一已 propose 的 Change。实施顺序：原有 Runtime/备份回归基线 → 包校验与持久化 → 显式 Skill（LF01/Dito）→ 自动发现与引用读取 → 管理/选择交互 → 恢复、取消、安全与真机验收。增加三组回归：prepare 类型化错误与旧版重试；空回答+收据不能误报成功且原 handoff 正常；并发预算、停用/更新和恢复中的版本收据一致性。归档后再 propose ima；不因存在官方 Skill 就跳过真实 API 权限验证。第12项延后到第11项通过，以现有 Learning Domain 为权威。

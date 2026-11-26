@@ -27,3 +27,23 @@ Host SHALL 保存实际加载的 Skill ID、名称、revision 及结果，取消
 #### Scenario: Ordinary chat without a skill
 - **WHEN** 未启用或选中任何适用 Skill
 - **THEN** 问答、导航、小老师、取消与恢复仍按原契约运行
+
+
+### Requirement: Extension preparation failures and execution receipts
+Host SHALL distinguish a validated selection from actual instruction loading and actual tool settlement; typed preparation failures MUST preserve a safe reason and recovery action. A receipt alone MUST NOT satisfy the successful answer condition. Host SHALL preserve existing structured business deliverables (e.g. handoff and question cards), persist bounded settled receipts and represent unconfirmed calls after interruption honestly.
+
+#### Scenario: Skill revision missing during retry
+- **WHEN** a retry refers to a removed or unauthorized revision
+- **THEN** the user sees a specific reason and reselect action, no substitute skill is silently loaded, and no model call is made
+
+#### Scenario: Model emits no answer after loading a skill
+- **WHEN** there is only a load receipt and no answer or legitimate structured business deliverable
+- **THEN** the turn is not reported as a successful answer; existing handoff-only and question-card terminal semantics remain valid
+
+#### Scenario: Concurrent load or read exceeds turn budget
+- **WHEN** multiple permitted skill calls concurrently reserve the remaining budget
+- **THEN** aggregate limits are not exceeded, excess calls receive a bounded error, and prior receipts remain accurate
+
+#### Scenario: Process ends after skill load
+- **WHEN** the application is killed after a load settles or before an invocation settles
+- **THEN** saved receipts identify the actual revision and settled status; unconfirmed activity is interrupted or unknown, not fabricated as successful

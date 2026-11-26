@@ -19,3 +19,11 @@
 - [ ] 执行 corepack pnpm typecheck、corepack pnpm test、openspec validate --all --strict；运行现有 LF01/LF02/事务/恢复/备份回归。
 - [ ] Android ARM64 真机：自定义教学 Skill 安装→显式选择→自动发现/加载→读取 reference→更新/停用→重启→备份恢复；无 Skill 普通对话与精通之路照常；记录 API/token/体积/时延。
 - [ ] 主会话验收并 archive；再 propose m2c-ima-knowledge-lf01。不得提前勾选未验证任务。
+
+
+## 6. Runtime contract hardening (required before archive)
+- [ ] Add typed, sanitized extension prepare failures and explicit stale-revision recovery actions; assert no model request for rejected selection.
+- [ ] Separate extension audit receipts from successful answer/business deliverable; checkpoint settled receipts, test abrupt termination and metadata merging; preserve handoff-only and question terminal outcomes.
+- [ ] Enforce shared turn-wide budget with concurrency tests, separate manual/automatic invocation flags, and verify the existing 8-round budget against real DeepSeek Flash runs.
+- [ ] Check unmet capability presentation and attempted privileged-name impersonation; verify no external connection or generic network/script permission is introduced in Change 10.
+- [ ] Update Android acceptance record to distinguish installed, enabled, loaded, and executed; if automatic discovery does not pass, record the gap and do not mark that capability as supported.

@@ -13,3 +13,10 @@
 
 ## Risks / Trade-offs
 SQLite 包体上限低于 Cherry（避免单文件 JSON 备份膨胀），后续二进制大包需单独设计文件原子发布及备份。自动加载指令经工具结果进入模型，不假定与系统 prompt 完全等价，以真机测试判断；必要时只开显式 Skill 不发布自动模式。第三方包可能含提示注入或脚本；限制文件读取、工具授权、secret 隔离而非仅靠 prompt。未知工具仅展示未满足，不默认为能运行。新数据结构可能影响旧备份与删除逻辑，必须回归。详见总体方案。
+
+
+## Implementation calibration (401cd47)
+- `ChatTurns.generate` 当前仅保留 VersionConflictError；增加脱敏的扩展准备错误类型与可操作的终态（旧 revision 不存在、scope denied、依赖未满足等），不要吞掉后报告普通模型故障。
+- 区分业务可交付物与扩展执行收据：现有 end_turn 允许 replyMetadata 非空即成功；Skill 收据不能单独满足完成条件，保留 handoff / question 等结构化业务结果。已完成 load/read 的轻量收据随 checkpoint 持久化，强杀后未确认调用为 interrupted/unknown，partial 写入不覆盖已保存 receipt。
+- 普通 RuntimeTool 可能并发、maxTurns 默认 8。每轮共享预算采用预留/原子记账，固定 revision、限制并发/调用次数/字符及上下文；自动发现模式 PoC 不通过则先只开放显式选择，不将未验证能力标为可用。自动/显式 invocation 标志各自生效。
+- 安装包、启用与外部工具授权分别建模。首期只建立最小可信目录和依赖就绪态，不做动态 connector 安装或任意 HTTP；ima adapter 与实际连接在第11项才注册。Skill 名称和 allowed-tools 不可冒充内置 capability。详见总体设计 §10。
