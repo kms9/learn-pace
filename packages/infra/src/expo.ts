@@ -1,10 +1,14 @@
 import * as SecureStore from "expo-secure-store";
-import { openDatabaseAsync, type SQLiteDatabase } from "expo-sqlite";
+import { openDatabaseAsync, type SQLiteBindValue, type SQLiteDatabase } from "expo-sqlite";
 import type { LearningProgress, PathStatus, PendingQuestion } from "@learn-pace/domain";
-import type {
-  AppStore, PathSummaryRecord, SecretStore, StoredInteraction, StoredMessage, StoredSession, StoredThread,
+import {
+  SubmissionConflictError, VersionConflictError,
+  type AppStore, type DatabaseSnapshot, type PathSummaryRecord, type SecretStore, type StoredDomainEvent, type StoredInteraction,
+  type StoredMessage, type StoredSession, type StoredThread,
 } from "./index.js";
 import { migrateLearningDatabase } from "./migrations.js";
+import { insertSnapshot } from "./snapshot.js";
+import { WriteQueue } from "./write-queue.js";
 
 export const expoSecretStore: SecretStore = {
   getItem: (key) => SecureStore.getItemAsync(key),
@@ -24,17 +28,75 @@ function encodeInteraction({ question, grade }: StoredInteraction): string {
 }
 
 type MessageRow = Omit<StoredMessage, "metadata"> & { metadata: string | null };
+type DomainEventRow = Omit<StoredDomainEvent, "payload"> & { payload: string };
+
+function decodeDomainEvent(row: DomainEventRow): StoredDomainEvent {
+  return { ...row, payload: JSON.parse(row.payload) as StoredDomainEvent["payload"] };
+}
 
 function decodeMessage(row: MessageRow): StoredMessage {
   return { ...row, metadata: row.metadata === null ? null : JSON.parse(row.metadata) as StoredMessage["metadata"] };
 }
 
 export class ExpoLearningStore implements AppStore {
-  private constructor(private readonly db: SQLiteDatabase) {}
+  private constructor(private readonly db: SQLiteDatabase, private readonly writes: WriteQueue | null = new WriteQueue()) {}
+
+  private write<T>(work: () => Promise<T>): Promise<T> {
+    return this.writes ? this.writes.run(work) : work();
+  }
+
+  private run(sql: string, ...params: SQLiteBindValue[]) {
+    return this.write(() => this.db.runAsync(sql, ...params));
+  }
+
+  async runInTransaction<T>(work: (tx: AppStore) => Promise<T>): Promise<T> {
+    if (!this.writes) return work(this);
+    return this.writes.run(async () => {
+      let result!: T;
+      await this.db.withExclusiveTransactionAsync(async (txn) => {
+        await txn.execAsync("PRAGMA busy_timeout = 5000");
+        result = await work(new ExpoLearningStore(txn, null));
+      });
+      return result;
+    });
+  }
+
+  async exportSnapshot(): Promise<DatabaseSnapshot> {
+    if (this.writes) return this.runInTransaction((tx) => tx.exportSnapshot());
+    const settings = await this.db.getAllAsync<DatabaseSnapshot["settings"][number]>("SELECT * FROM settings ORDER BY name");
+    const paths = await this.db.getAllAsync<{ progress: string; version: number; status: PathStatus }>(
+      "SELECT progress, version, status FROM learning_progress ORDER BY path_id",
+    );
+    const sessions = await this.db.getAllAsync<StoredSession>("SELECT * FROM sessions ORDER BY session_id");
+    const messages = await this.db.getAllAsync<MessageRow>("SELECT * FROM messages ORDER BY message_id");
+    const threads = await this.db.getAllAsync<StoredThread>("SELECT * FROM session_threads ORDER BY thread_id");
+    const interactions = await this.db.getAllAsync<InteractionRow>("SELECT * FROM interactions ORDER BY interaction_id");
+    const events = await this.db.getAllAsync<DomainEventRow>("SELECT * FROM domain_events ORDER BY rowid");
+    return { settings, learning_progress: paths.map(({ progress, version, status }) => ({
+      progress: { ...JSON.parse(progress) as LearningProgress, version }, status,
+    })), sessions, messages: messages.map(decodeMessage), session_threads: threads,
+    interactions: interactions.map(decodeInteraction), domain_events: events.map(decodeDomainEvent) };
+  }
+
+  async replaceSnapshot(snapshot: DatabaseSnapshot, afterReplace?: (tx: AppStore) => Promise<void>): Promise<void> {
+    if (this.writes) return this.runInTransaction((tx) => tx.replaceSnapshot(snapshot, afterReplace));
+    await this.db.execAsync(`
+      DELETE FROM domain_events;
+      DELETE FROM interactions;
+      DELETE FROM session_threads;
+      DELETE FROM messages;
+      DELETE FROM sessions;
+      DELETE FROM learning_progress;
+      DELETE FROM settings;
+    `);
+    await insertSnapshot(this, snapshot);
+    await afterReplace?.(this);
+  }
 
   static async open(): Promise<ExpoLearningStore> {
     const db = await openDatabaseAsync("learn-pace.db");
     try {
+      await db.execAsync("PRAGMA busy_timeout = 5000");
       await migrateLearningDatabase(db);
     } catch (error) {
       await db.closeAsync().catch(() => {});
@@ -44,20 +106,37 @@ export class ExpoLearningStore implements AppStore {
   }
 
   async get(pathId: string): Promise<LearningProgress | null> {
-    const row = await this.db.getFirstAsync<{ progress: string }>(
-      "SELECT progress FROM learning_progress WHERE path_id = ?", pathId,
+    const row = await this.db.getFirstAsync<{ progress: string; version: number }>(
+      "SELECT progress, version FROM learning_progress WHERE path_id = ?", pathId,
     );
-    return row ? JSON.parse(row.progress) as LearningProgress : null;
+    return row ? { ...JSON.parse(row.progress) as LearningProgress, version: row.version } : null;
   }
 
   async save(progress: LearningProgress, status?: PathStatus): Promise<void> {
-    await this.db.runAsync(`
-      INSERT INTO learning_progress (path_id, progress, name, updated_at, status)
-      VALUES (?, ?, ?, ?, COALESCE(?, 'active'))
+    const changedStatus = status ?? null;
+    await this.run(`
+      INSERT INTO learning_progress (path_id, progress, name, updated_at, version, status)
+      VALUES (?, ?, ?, ?, ?, COALESCE(?, 'active'))
       ON CONFLICT (path_id) DO UPDATE SET
         progress = excluded.progress, name = excluded.name, updated_at = excluded.updated_at,
-        status = COALESCE(?, learning_progress.status)
-    `, progress.book_id, JSON.stringify(progress), progress.name, progress.updated_at, status ?? null, status ?? null);
+        version = excluded.version, status = COALESCE(?, learning_progress.status)
+    `, progress.book_id, JSON.stringify(progress), progress.name, progress.updated_at, progress.version,
+    changedStatus, changedStatus);
+  }
+
+  async saveWithCas(progress: LearningProgress, expectedVersion: number | null, status?: PathStatus): Promise<void> {
+    if (expectedVersion !== null && progress.version !== expectedVersion + 1) throw new VersionConflictError();
+    const json = JSON.stringify(progress);
+    const result = expectedVersion === null
+      ? await this.run(`
+        INSERT INTO learning_progress (path_id, progress, name, updated_at, version, status)
+        VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT (path_id) DO NOTHING
+      `, progress.book_id, json, progress.name, progress.updated_at, progress.version, status ?? "active")
+      : await this.run(`
+        UPDATE learning_progress SET progress = ?, name = ?, updated_at = ?, version = ?, status = COALESCE(?, status)
+        WHERE path_id = ? AND version = ?
+      `, json, progress.name, progress.updated_at, progress.version, status ?? null, progress.book_id, expectedVersion);
+    if (result.changes !== 1) throw new VersionConflictError();
   }
 
   async listPathSummaries(): Promise<PathSummaryRecord[]> {
@@ -75,7 +154,7 @@ export class ExpoLearningStore implements AppStore {
   }
 
   async delete(pathId: string): Promise<void> {
-    await this.db.runAsync("DELETE FROM learning_progress WHERE path_id = ?", pathId);
+    await this.run("DELETE FROM learning_progress WHERE path_id = ?", pathId);
   }
 
   async getOpenInteraction(pathId: string): Promise<StoredInteraction | null> {
@@ -92,8 +171,39 @@ export class ExpoLearningStore implements AppStore {
     `);
   }
 
+  async listOpenInteractions(): Promise<StoredInteraction[]> {
+    const rows = await this.db.getAllAsync<InteractionRow>(`
+      SELECT * FROM interactions WHERE status IN ('awaiting_input', 'answered')
+      ORDER BY updated_at DESC, interaction_id
+    `);
+    return rows.map(decodeInteraction);
+  }
+
+  async listOpenInteractionsByPath(pathId: string): Promise<StoredInteraction[]> {
+    const rows = await this.db.getAllAsync<InteractionRow>(`
+      SELECT * FROM interactions WHERE path_id = ? AND status IN ('awaiting_input', 'answered')
+      ORDER BY updated_at DESC, interaction_id
+    `, pathId);
+    return rows.map(decodeInteraction);
+  }
+
   async getInteraction(id: string): Promise<StoredInteraction | null> {
     return this.readInteraction("SELECT * FROM interactions WHERE interaction_id = ?", id);
+  }
+
+  async findInteractionBySubmission(submissionId: string): Promise<StoredInteraction | null> {
+    return this.readInteraction("SELECT * FROM interactions WHERE submission_id = ?", submissionId);
+  }
+
+  private async writeInteraction(sql: string, ...params: SQLiteBindValue[]): Promise<void> {
+    try {
+      await this.run(sql, ...params);
+    } catch (error) {
+      if (error instanceof Error && error.message.includes("UNIQUE constraint failed: interactions.submission_id")) {
+        throw new SubmissionConflictError();
+      }
+      throw error;
+    }
   }
 
   private async readInteraction(query: string, ...params: string[]): Promise<StoredInteraction | null> {
@@ -102,7 +212,7 @@ export class ExpoLearningStore implements AppStore {
   }
 
   async insertInteraction(interaction: StoredInteraction): Promise<void> {
-    await this.db.runAsync(`
+    await this.writeInteraction(`
       INSERT INTO interactions (
         interaction_id, path_id, session_id, turn_id, status, question, raw_answer, submission_id, updated_at
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -112,25 +222,25 @@ export class ExpoLearningStore implements AppStore {
   }
 
   async saveAnswer(id: string, submissionId: string, rawAnswer: string, now: number): Promise<void> {
-    await this.db.runAsync(`
+    await this.writeInteraction(`
       UPDATE interactions SET raw_answer = ?, submission_id = ?, status = 'answered', updated_at = ?
       WHERE interaction_id = ? AND status != 'abandoned'
     `, rawAnswer, submissionId, now, id);
   }
 
   async markGraded(id: string, now: number): Promise<void> {
-    await this.db.runAsync(
+    await this.run(
       "UPDATE interactions SET status = 'graded', updated_at = ? WHERE interaction_id = ? AND status != 'abandoned'", now, id,
     );
   }
 
   async abandonInteraction(id: string, now: number): Promise<void> {
-    await this.db.runAsync(`UPDATE interactions SET status = 'abandoned', updated_at = ?
+    await this.run(`UPDATE interactions SET status = 'abandoned', updated_at = ?
       WHERE interaction_id = ? AND status IN ('awaiting_input', 'answered')`, now, id);
   }
 
   async deleteInteractionsByPath(pathId: string): Promise<void> {
-    await this.db.runAsync("DELETE FROM interactions WHERE path_id = ?", pathId);
+    await this.run("DELETE FROM interactions WHERE path_id = ?", pathId);
   }
 
   async listInteractionsBySession(sessionId: string): Promise<StoredInteraction[]> {
@@ -141,7 +251,7 @@ export class ExpoLearningStore implements AppStore {
   }
 
   async updateInteraction(interaction: StoredInteraction): Promise<void> {
-    await this.db.runAsync(`UPDATE interactions SET status = ?, question = ?, raw_answer = ?, submission_id = ?, updated_at = ?
+    await this.writeInteraction(`UPDATE interactions SET status = ?, question = ?, raw_answer = ?, submission_id = ?, updated_at = ?
       WHERE interaction_id = ? AND path_id = ? AND session_id = ?`, interaction.status, encodeInteraction(interaction),
     interaction.raw_answer, interaction.submission_id, interaction.updated_at,
     interaction.interaction_id, interaction.path_id, interaction.session_id);
@@ -153,7 +263,7 @@ export class ExpoLearningStore implements AppStore {
   }
 
   async writeSetting(name: string, value: string): Promise<void> {
-    await this.db.runAsync(`
+    await this.run(`
       INSERT INTO settings (name, value) VALUES (?, ?)
       ON CONFLICT (name) DO UPDATE SET value = excluded.value
     `, name, value);
@@ -164,7 +274,7 @@ export class ExpoLearningStore implements AppStore {
   }
 
   async saveSession(session: StoredSession): Promise<void> {
-    await this.db.runAsync(`
+    await this.run(`
       INSERT INTO sessions (session_id, kind, path_id, mode, title, model_id, created_at, updated_at)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT (session_id) DO UPDATE SET
         kind = excluded.kind, path_id = excluded.path_id, mode = excluded.mode, title = excluded.title,
@@ -184,15 +294,17 @@ export class ExpoLearningStore implements AppStore {
   }
 
   async updateSession(session: StoredSession): Promise<void> {
-    await this.db.runAsync(`UPDATE sessions SET kind = ?, path_id = ?, mode = ?, title = ?, model_id = ?,
+    await this.run(`UPDATE sessions SET kind = ?, path_id = ?, mode = ?, title = ?, model_id = ?,
       created_at = ?, updated_at = ? WHERE session_id = ?`, session.kind, session.path_id, session.mode, session.title,
     session.model_id, session.created_at, session.updated_at, session.session_id);
   }
 
   async deleteSessionsByPath(pathId: string, kind: string): Promise<void> {
-    await this.db.runAsync(`DELETE FROM messages WHERE session_id IN
-      (SELECT session_id FROM sessions WHERE path_id = ? AND kind = ?)`, pathId, kind);
-    await this.db.runAsync("DELETE FROM sessions WHERE path_id = ? AND kind = ?", pathId, kind);
+    await this.write(async () => {
+      await this.db.runAsync(`DELETE FROM messages WHERE session_id IN
+        (SELECT session_id FROM sessions WHERE path_id = ? AND kind = ?)`, pathId, kind);
+      await this.db.runAsync("DELETE FROM sessions WHERE path_id = ? AND kind = ?", pathId, kind);
+    });
   }
 
   async getMessage(id: string): Promise<StoredMessage | null> {
@@ -201,7 +313,7 @@ export class ExpoLearningStore implements AppStore {
   }
 
   async saveMessage(message: StoredMessage): Promise<void> {
-    await this.db.runAsync(`
+    await this.run(`
       INSERT INTO messages (message_id, session_id, role, content, status, turn_id, metadata, created_at)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT (message_id) DO UPDATE SET
         session_id = excluded.session_id, role = excluded.role, content = excluded.content,
@@ -219,7 +331,7 @@ export class ExpoLearningStore implements AppStore {
 
   async deleteMessages(ids: readonly string[]): Promise<void> {
     if (!ids.length) return;
-    await this.db.runAsync("DELETE FROM messages WHERE message_id IN (SELECT value FROM json_each(?))", JSON.stringify(ids));
+    await this.run("DELETE FROM messages WHERE message_id IN (SELECT value FROM json_each(?))", JSON.stringify(ids));
   }
 
   async getThread(id: string): Promise<StoredThread | null> {
@@ -227,7 +339,7 @@ export class ExpoLearningStore implements AppStore {
   }
 
   async saveThread(thread: StoredThread): Promise<void> {
-    await this.db.runAsync(`
+    await this.run(`
       INSERT INTO session_threads (
         thread_id, parent_session_id, source_message_id, selected_text, title, created_at, updated_at,
         selection_start, selection_end, detached_at
@@ -241,7 +353,7 @@ export class ExpoLearningStore implements AppStore {
   }
 
   async updateThread(thread: StoredThread): Promise<void> {
-    await this.db.runAsync(`
+    await this.run(`
       UPDATE session_threads SET parent_session_id = ?, source_message_id = ?, selected_text = ?, title = ?,
         created_at = ?, updated_at = ?, selection_start = ?, selection_end = ?, detached_at = ?
       WHERE thread_id = ?
@@ -250,19 +362,39 @@ export class ExpoLearningStore implements AppStore {
   }
 
   async deleteThread(id: string): Promise<void> {
-    await this.db.runAsync(`
-      DELETE FROM messages WHERE session_id = (SELECT thread_id FROM session_threads WHERE thread_id = ?)
-    `, id);
-    await this.db.runAsync(`
-      DELETE FROM sessions WHERE session_id = (SELECT thread_id FROM session_threads WHERE thread_id = ?)
-    `, id);
-    await this.db.runAsync("DELETE FROM session_threads WHERE thread_id = ?", id);
+    await this.write(async () => {
+      await this.db.runAsync(`
+        DELETE FROM messages WHERE session_id = (SELECT thread_id FROM session_threads WHERE thread_id = ?)
+      `, id);
+      await this.db.runAsync(`
+        DELETE FROM sessions WHERE session_id = (SELECT thread_id FROM session_threads WHERE thread_id = ?)
+      `, id);
+      await this.db.runAsync("DELETE FROM session_threads WHERE thread_id = ?", id);
+    });
   }
 
   async listThreads(parentSessionId: string): Promise<StoredThread[]> {
     return this.db.getAllAsync<StoredThread>(`
       SELECT * FROM session_threads WHERE parent_session_id = ? ORDER BY created_at, thread_id
     `, parentSessionId);
+  }
+
+  async appendDomainEvent(event: StoredDomainEvent): Promise<void> {
+    await this.run(`
+      INSERT INTO domain_events (event_id, path_id, session_id, turn_id, event_type, payload, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+    `, event.event_id, event.path_id, event.session_id, event.turn_id, event.event_type, JSON.stringify(event.payload), event.created_at);
+  }
+
+  async listDomainEvents(pathId: string, limit = -1): Promise<StoredDomainEvent[]> {
+    const rows = await this.db.getAllAsync<DomainEventRow>(`
+      SELECT * FROM domain_events WHERE path_id = ? ORDER BY rowid DESC LIMIT ?
+    `, pathId, limit);
+    return rows.map(decodeDomainEvent);
+  }
+
+  async deleteDomainEventsByPath(pathId: string): Promise<void> {
+    await this.run("DELETE FROM domain_events WHERE path_id = ?", pathId);
   }
 
   async inspect() {

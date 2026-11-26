@@ -17,6 +17,7 @@
   },
   "exports": {
     ".": "./src/index.ts",
-    "./expo": "./src/expo.ts"
+    "./expo": "./src/expo.ts",
+    "./testing": "./src/testing/fault-store.ts"
   }
 }

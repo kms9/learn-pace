@@ -1,4 +1,5 @@
 import { KNOWLEDGE_TYPES, stateDigest, type LearnerProfile, type LearningProgress, type SessionMode } from "@learn-pace/domain";
+import { VersionConflictError } from "@learn-pace/infra";
 import type { PiDurableRuntime, RuntimeTool } from "@learn-pace/runtime";
 import { ChatTurnError } from "../../chat-turns.js";
 import { masteryModeInstructions } from "../prompts.js";
@@ -71,6 +72,7 @@ export function registerMasteryTools(runtime: PiDurableRuntime, host: ToolContex
           try {
             return JSON.parse(JSON.stringify(await execute(args))) as Awaited<ReturnType<RuntimeTool["execute"]>>;
           } catch (error) {
+            if (error instanceof VersionConflictError) return { ok: false, code: "version_conflict", message: error.message };
             if (error instanceof ToolRefusal || error instanceof ChatTurnError) return { ok: false, code: "rejected", message: error.message };
             return { ok: false, code: "unavailable", message: "无法完成工具操作，请重新读取状态再试。" };
           }
@@ -132,15 +134,18 @@ export function registerMasteryTools(runtime: PiDurableRuntime, host: ToolContex
       }
       const preview = host.previews.get(input.preview_id);
       if (preview?.session_id !== host.sessionId || preview.path_id !== host.pathId ||
-          preview.expires_at <= now || preview.base_revision !== previous.version || preview.before_digest !== stateDigest(previous)) {
-        throw new ToolRefusal("预览已过期、不属于本会话或基线已改变，请重新预览");
+          preview.expires_at <= now) {
+        throw new ToolRefusal("预览已过期或不属于本会话，请重新预览");
+      }
+      if (preview.base_revision !== previous.version || preview.before_digest !== stateDigest(previous)) {
+        throw new VersionConflictError();
       }
       await host.save(preview.plan.progress, true);
       host.previews.delete(input.preview_id);
       return { ok: true, action: "commit", path_revision: (await host.status()).path_revision, effects: preview.plan.effects };
     }
-    if (input.action === "preview" && input.expected_revision !== previous.version) {
-      throw new ToolRefusal("大纲版本已变化，请先读取 mastery_status 再重新预览");
+    if ((input.action === "preview" || input.expected_revision !== undefined) && input.expected_revision !== previous.version) {
+      throw new VersionConflictError();
     }
     const proposal = plan(() => planRevision(previous, input, host.makeId));
     if (input.action === "preview") {

@@ -1,8 +1,9 @@
 import {
-  MasterySessionError, masteryModeLabels, masteryModeNotes, masteryStarters, masteryToolStatusLabel, type MasterySessionService, type StudyCard,
+  MasterySessionError, RestoreGateError, StaleInteractionError, masteryModeLabels, masteryModeNotes, masteryStarters, masteryToolStatusLabel,
+  type MasterySessionService, type StudyCard,
 } from "@learn-pace/app-host";
 import type { SessionMode } from "@learn-pace/domain";
-import type { StoredMessage, StoredSession } from "@learn-pace/infra";
+import { SubmissionConflictError, VersionConflictError, type StoredMessage, type StoredSession } from "@learn-pace/infra";
 import { useHeaderHeight } from "expo-router/react-navigation";
 import { useFocusEffect, useLocalSearchParams, useRouter } from "expo-router";
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -25,7 +26,9 @@ const modes: readonly SessionMode[] = ["outline", "study", "review"];
 const modeTitles = { outline: "定下你的大纲", study: "", review: "回头过一遍学过的" };
 
 function messageFor(cause: unknown) {
-  return cause instanceof MasterySessionError ? cause.message : "无法完成操作，请重试";
+  return cause instanceof MasterySessionError || cause instanceof SubmissionConflictError || cause instanceof VersionConflictError ||
+    cause instanceof RestoreGateError
+    ? cause.message : "无法完成操作，请重试";
 }
 
 export default function MasterySessionRoute() {
@@ -96,6 +99,11 @@ function SessionScreen({ pathId, sessionId }: { pathId: string; sessionId: strin
     const unobserveActivity = mastery.observeActivity(sessionId, setToolName);
     const unobserveMessages = mastery.observeMessages(sessionId, (message) => {
       messageEvents++;
+      const runtime = message.metadata?.runtime as { tools?: { code?: string }[] } | undefined;
+      if (runtime?.tools?.some(({ code }) => code === "version_conflict")) {
+        setError(new VersionConflictError().message);
+        setAttempt((value) => value + 1);
+      }
       setMessages((items) => {
         if (items.some(({ message_id }) => message_id === message.message_id)) {
           return items.map((item) => item.message_id === message.message_id ? message : item);
@@ -141,8 +149,12 @@ function SessionScreen({ pathId, sessionId }: { pathId: string; sessionId: strin
     active.current = true;
     setError(undefined);
     setBusy(true);
-    void run().catch((cause: unknown) => setError(messageFor(cause)))
-      .finally(() => { active.current = false; setBusy(false); });
+    void run().catch((cause: unknown) => {
+      setError(messageFor(cause));
+      if (cause instanceof SubmissionConflictError || cause instanceof VersionConflictError || cause instanceof StaleInteractionError) {
+        setAttempt((value) => value + 1);
+      }
+    }).finally(() => { active.current = false; setBusy(false); });
   }
 
   const waiting = runningId !== undefined && runningId !== sessionId;
@@ -176,10 +188,13 @@ function SessionScreen({ pathId, sessionId }: { pathId: string; sessionId: strin
     return <QuestionCard key={card.interaction_id} card={card} submitting={generating}
       disabled={disabled || !configured || mode === "outline"}
       onAnswerControls={onAnswerControls}
-      submit={(answers) => {
+      submit={(answers, submissionId) => {
         follow.current = true;
         Keyboard.dismiss();
-        perform(() => mastery.submitAnswer(pathId, sessionId, card.interaction_id, answers));
+        perform(async () => {
+          const result = await mastery.submitAnswer(pathId, sessionId, card.interaction_id, answers, submissionId);
+          if (result.kind === "receipt") setAttempt((value) => value + 1);
+        });
       }}
       retry={() => perform(() => mastery.retryAnswer(pathId, sessionId, card.interaction_id))}
       skip={() => perform(() => mastery.skipQuestion(pathId, sessionId, card.interaction_id))}
@@ -253,7 +268,7 @@ function SessionScreen({ pathId, sessionId }: { pathId: string; sessionId: strin
             <ChatAction label="开始学习" primary disabled={disabled} onPress={newStudy} />
           </View>}
           {waiting && <Text accessibilityRole="alert" style={styles.body}>同一精通目标的另一会话正在进行，请等它结束再发送。</Text>}
-          {error && <Text accessibilityRole="alert" style={local.error}>{error}</Text>}
+          {error && <Text accessibilityRole="alert" accessibilityLiveRegion="polite" style={local.error}>{error}</Text>}
           {answerBar ? <View style={local.answerActions} testID="mastery-answer-actions">
             <ChatAction label="收起键盘" onPress={() => { answerBar.controls.finishEditing(); Keyboard.dismiss(); }} />
             {answerBar.controls.next && <ChatAction label="下一题" onPress={answerBar.controls.next} />}
@@ -338,7 +353,7 @@ const local = StyleSheet.create({
   ready: { flexDirection: "row", alignItems: "center", gap: spacing.xs, borderRadius: radius.card,
     padding: spacing.sm, backgroundColor: colors.soft },
   readyLabel: { color: colors.text, flex: 1, fontWeight: "600" },
-  error: { color: colors.danger },
+  error: { color: colors.danger, backgroundColor: colors.dangerSoft, borderRadius: radius.sm, padding: spacing.sm },
   sheet: { flexGrow: 0, maxHeight: 470 },
   sheetContents: { paddingBottom: spacing.md },
 });

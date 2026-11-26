@@ -1,5 +1,5 @@
 import { createKnowledgePoint, createLearningModule, createLearningProgress, createPendingQuestion } from "@learn-pace/domain";
-import { MemoryAppStore, MemorySecretStore, type StoredMessage } from "@learn-pace/infra";
+import { MemoryAppStore, MemorySecretStore } from "@learn-pace/infra";
 import { afterEach, expect, it, vi } from "vitest";
 import { completion, modelConfig, streamUntilAborted, text, toolCall } from "../../../runtime/src/__tests__/deepseek-fixture.js";
 import { AppBootstrapService, messageHandoffs, messageQuotes, type MasteryHandoff } from "../index.js";
@@ -226,31 +226,6 @@ it("retries and regenerates in place, keeps following messages and sanitizes net
     .toEqual(["first", "prior", "last", "updated"]);
 });
 
-it("recovers partial and missing replies locally without automatic retries", async () => {
-  const { chat, open, store, fetch } = harness();
-  const { session_id } = await chat.createSession();
-  const user: StoredMessage = {
-    message_id: "u", session_id, role: "user", content: "old question", status: "committed",
-    turn_id: "turn", created_at: 10, metadata: { model_id: "saved-model" },
-  };
-  await store.saveMessage(user);
-  await store.saveMessage({
-    ...user, message_id: "a", role: "assistant", status: "generating", content: "saved part",
-    created_at: 11, metadata: { source_user_message_id: "u", model_id: "saved-model" },
-  });
-  await store.saveMessage({ ...user, message_id: "orphan", turn_id: "next", created_at: 12 });
-  const reopened = open();
-  await reopened.recoverInterruptedTurns();
-  await reopened.recoverInterruptedTurns();
-  const { messages } = await reopened.readConversation(session_id);
-  expect(messages).toHaveLength(4);
-  expect(messages[1]).toMatchObject({ status: "interrupted", content: "saved part", metadata: { model_id: "saved-model" } });
-  expect(messages[3]).toMatchObject({
-    status: "interrupted", content: "", turn_id: "next", metadata: { source_user_message_id: "orphan", model_id: "saved-model" },
-  });
-  expect(fetch).not.toHaveBeenCalled();
-});
-
 it("limits quoted excerpts and sends numbered references without storing them in the user's text", async () => {
   const { chat, configure, request } = harness(completion([text("🍊".repeat(2_001))]));
   await configure();
@@ -327,20 +302,16 @@ it("includes the newest bounded parent transcript as data and refreshes it each 
     .toEqual(["side question", "回复", "follow up"]);
 });
 
-it("reopens a side chat after interruption, detaches its anchor and deletes only its own records", async () => {
+it("reopens a side chat, detaches its anchor and deletes only its own records", async () => {
   const { chat, configure, fetch, open, store } = harness();
   await configure();
   const { session_id } = await chat.createSession();
   const anchor = await chat.send(session_id, "main");
   const thread = await chat.createThread(session_id, anchor.message_id, { start: 0, end: 2, text: "回复" });
   const reply = await chat.send(thread.thread_id, "side");
-  await store.saveMessage({ ...reply, status: "generating", content: "side checkpoint" });
   const reopened = open();
-  await reopened.recoverInterruptedTurns();
   expect(await reopened.listThreads(session_id, anchor.message_id)).toEqual([thread]);
-  expect((await reopened.readThread(thread.thread_id)).messages[1]).toMatchObject({
-    status: "interrupted", content: "side checkpoint",
-  });
+  expect((await reopened.readThread(thread.thread_id)).messages[1]).toEqual(reply);
   expect(fetch).toHaveBeenCalledTimes(2);
   await reopened.detachThread(thread.thread_id);
   expect(await reopened.listThreads(session_id, anchor.message_id)).toEqual([]);

@@ -1,8 +1,9 @@
-import { ModelSettingsError } from "@learn-pace/app-host";
+import { ModelSettingsError, RestoreGateError } from "@learn-pace/app-host";
 import { useRouter } from "expo-router";
 import { useEffect, useRef, useState } from "react";
 import { Keyboard, StyleSheet, Text, TextInput } from "react-native";
 import { importUsbConfiguration } from "../../src/configuration";
+import { BackupCard } from "../../src/components/BackupCard";
 import { Action, Card, Page, styles } from "../../src/components/Shell";
 import { useApp } from "../../src/context/AppContext";
 import { colors, spacing } from "../../src/theme";
@@ -37,7 +38,7 @@ export default function Settings() {
       setFeedback(await action());
     } catch (error) {
       setFeedback({
-        message: error instanceof ModelSettingsError ? error.message : "操作失败，请检查配置后重试。",
+        message: error instanceof ModelSettingsError || error instanceof RestoreGateError ? error.message : "操作失败，请检查配置后重试。",
         failed: true,
       });
     } finally {
@@ -104,6 +105,7 @@ export default function Settings() {
         {busy && <Text accessibilityLiveRegion="polite" style={styles.body}>正在处理</Text>}
         {feedback && <Text accessibilityLiveRegion="polite" style={feedback.failed ? form.failure : form.success}>{feedback.message}</Text>}
       </Card>
+      <BackupCard />
       {__DEV__ && (
         <Card title="开发工具">
           <TextInput

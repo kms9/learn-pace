@@ -458,7 +458,7 @@ function buildReviewReport(
   const task = progress.review_queue.find((item) => item.knowledge_point_id === kpId) ?? null;
   const scheduler = schedulerForProgress(progress);
   const recall = scheduler.retrievability(state, now);
-  const risk = task ? task.forgetting_risk : scheduler.forgettingRisk(state, progress, kpId, now);
+  const risk = scheduler.forgettingRisk(state, progress, kpId, now);
   const reason = task
     ? task.reason
     : scheduler.reviewReason(state, progress, kpId, { now });

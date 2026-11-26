@@ -435,6 +435,7 @@ export class SpacedRepetitionScheduler {
     now?: number,
   ): number {
     const moment = now ?? Date.now() / 1000;
+    if (state.last_review_at !== null && moment < state.last_review_at) return 0;
     const recall = this.retrievability(state, moment);
     let risk = 1.0 - recall;
     if (moment > state.next_review_at) {

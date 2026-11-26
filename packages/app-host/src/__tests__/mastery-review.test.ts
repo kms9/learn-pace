@@ -59,7 +59,7 @@ async function prepare(definitions: { id: string; name: string; type: KnowledgeT
     const row = await post(session, objective);
     if (assisted) await store.updateInteraction({ ...row, question: { ...row.question, assistance_used: true } });
     const option = row.question.options.find(({ label }) => (label === row.question.expected_answer) === passes)!;
-    await mastery.submitAnswer(path, session, row.interaction_id, { [row.question.question_id]: option.label });
+    await mastery.submitAnswer(path, session, row.interaction_id, { [row.question.question_id]: option.label }, `submission-${++serial}`);
     clock.advance(3);
   };
   const request = (index: number) => JSON.parse(String(fetch.mock.calls.at(index)?.[1]?.body));

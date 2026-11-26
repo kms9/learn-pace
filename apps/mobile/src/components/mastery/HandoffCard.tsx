@@ -1,4 +1,4 @@
-import { MasterySessionError, type MasteryHandoff } from "@learn-pace/app-host";
+import { MasterySessionError, RestoreGateError, type MasteryHandoff } from "@learn-pace/app-host";
 import { useRouter } from "expo-router";
 import { useRef, useState } from "react";
 import { Keyboard, StyleSheet, Text, TextInput, View } from "react-native";
@@ -27,7 +27,7 @@ export function HandoffCard({ handoff }: { handoff: MasteryHandoff }) {
       router.push({ pathname: "/mastery/[pathId]/session/[sessionId]",
         params: { pathId: handoff.path_id, sessionId: session.session_id } });
     } catch (cause) {
-      setError(cause instanceof MasterySessionError ? cause.message : "无法打开精通会话，请重试");
+      setError(cause instanceof MasterySessionError || cause instanceof RestoreGateError ? cause.message : "无法打开精通会话，请重试");
     } finally {
       openingSession.current = false;
       setBusy(false);

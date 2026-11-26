@@ -1,21 +1,26 @@
-import { AppBootstrapService, LearningHomeService, type BootstrapSnapshot, type Lf01ChatService, type MasterySessionService } from "@learn-pace/app-host";
+import { AppBootstrapService, LearningHomeService, type BackupRestoreService, type BootstrapSnapshot, type Lf01ChatService, type MasterySessionService } from "@learn-pace/app-host";
 import { systemClock, type Clock } from "@learn-pace/infra";
 import { ExpoLearningStore, expoSecretStore } from "@learn-pace/infra/expo";
+import Constants from "expo-constants";
 import { randomUUID } from "expo-crypto";
 import { fetch as expoFetch } from "expo/fetch";
-import { createContext, useContext, useEffect, useRef, useState, type ReactNode } from "react";
+import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from "react";
 import { ActivityIndicator, Button, StyleSheet, Text, View } from "react-native";
 import { colors, spacing } from "../theme";
+import mobileConfig from "../../app.json";
+import { sha256Backup } from "../backup-io";
 
 type AppContextValue = {
   service: AppBootstrapService;
   chat: Lf01ChatService;
   mastery: MasterySessionService;
   learningHome: LearningHomeService;
+  backup: BackupRestoreService;
   clock: Clock;
   devClock?: { days: number; setDays: (days: number) => void };
   snapshot: BootstrapSnapshot;
   reload: () => Promise<void>;
+  restart: () => void;
   inspectDatabase: () => ReturnType<ExpoLearningStore["inspect"]>;
 };
 
@@ -31,7 +36,7 @@ function openStorage(): Promise<ExpoLearningStore> {
 }
 
 export function AppProvider({ children }: { children: ReactNode }) {
-  const [data, setData] = useState<Omit<AppContextValue, "clock" | "devClock"> | null>(null);
+  const [data, setData] = useState<Omit<AppContextValue, "clock" | "devClock" | "restart"> | null>(null);
   const [failed, setFailed] = useState(false);
   const [attempt, setAttempt] = useState(0);
   const offset = useRef(0);
@@ -39,6 +44,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [clock] = useState<Clock>(() => __DEV__
     ? { nowSeconds: () => systemClock.nowSeconds() + offset.current * 86_400 }
     : systemClock);
+  const restart = useCallback(() => {
+    setData(null);
+    setFailed(false);
+    setAttempt((current) => current + 1);
+  }, []);
 
   useEffect(() => {
     let mounted = true;
@@ -48,18 +58,18 @@ export function AppProvider({ children }: { children: ReactNode }) {
         makeId: randomUUID,
         fetch: expoFetch as unknown as typeof globalThis.fetch,
       });
+      await service.recoverOnStartup(clock);
       const chat = service.createLf01ChatService(clock);
       const mastery = service.createMasterySessionService(clock);
       const learningHome = new LearningHomeService(store, clock);
-      await chat.recoverInterruptedTurns();
-      await mastery.recoverInterruptedTurns();
+      const backup = service.createBackupRestoreService(Constants.expoConfig?.version ?? mobileConfig.expo.version, sha256Backup);
       const snapshot = await service.snapshot();
       if (!mounted) return;
       const reload = async () => {
         const latest = await service.snapshot();
-        if (mounted) setData((current) => current && { ...current, snapshot: latest });
+        if (mounted) setData((current) => current?.service === service ? { ...current, snapshot: latest } : current);
       };
-      setData({ service, chat, mastery, learningHome, snapshot, reload, inspectDatabase: () => store.inspect() });
+      setData({ service, chat, mastery, learningHome, backup, snapshot, reload, inspectDatabase: () => store.inspect() });
     }
     void open().catch(() => {
       if (mounted) setFailed(true);
@@ -73,7 +83,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         {failed ? (
           <>
             <Text style={styles.label}>无法打开本地学习数据</Text>
-            <Button title="重试" onPress={() => { setFailed(false); setAttempt((current) => current + 1); }} />
+            <Button title="重试" onPress={restart} />
           </>
         ) : (
           <>
@@ -86,7 +96,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   }
 
   const devClock = __DEV__ ? { days, setDays: (next: number) => { offset.current = next; setDays(next); } } : undefined;
-  return <AppContext.Provider value={{ ...data, clock, devClock }}>{children}</AppContext.Provider>;
+  return <AppContext.Provider value={{ ...data, clock, devClock, restart }}>{children}</AppContext.Provider>;
 }
 
 export function useApp() {

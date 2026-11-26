@@ -58,6 +58,7 @@ export interface InteractionGrade {
 
 export interface InteractionStore {
   getOpenInteraction(pathId: string): Promise<StoredInteraction | null>;
+  listOpenInteractions(): Promise<StoredInteraction[]>;
   getInteraction(id: string): Promise<StoredInteraction | null>;
   insertInteraction(interaction: StoredInteraction): Promise<void>;
   saveAnswer(id: string, submissionId: string, rawAnswer: string, now: number): Promise<void>;
@@ -140,10 +141,56 @@ export interface PathSummaryRecord {
   updated_at: number;
 }
 
+export class VersionConflictError extends Error {
+  constructor() {
+    super("学习进度已更新，请刷新后重试。若在修改大纲，请重新生成预览。");
+    this.name = "VersionConflictError";
+  }
+}
+
+export class SubmissionConflictError extends Error {
+  constructor() {
+    super("这次提交已用于另一份作答，请刷新题卡后重试。");
+    this.name = "SubmissionConflictError";
+  }
+}
+
+export interface StoredDomainEvent {
+  event_id: string;
+  path_id: string;
+  session_id: string | null;
+  turn_id: string | null;
+  event_type: "AnswerRecorded" | "AssessmentCommitted" | "OutlineCommitted" | "AssessmentVoided" | "AssessmentCorrected";
+  payload: Record<string, unknown>;
+  created_at: number;
+}
+
+export interface DatabaseSnapshot {
+  settings: { name: string; value: string }[];
+  learning_progress: { progress: LearningProgress; status: PathStatus }[];
+  interactions: StoredInteraction[];
+  sessions: StoredSession[];
+  messages: StoredMessage[];
+  session_threads: StoredThread[];
+  domain_events: StoredDomainEvent[];
+}
+
 export interface AppStore extends SettingsStore, LearningProgressStore, InteractionStore, SessionStore, MessageStore, ThreadStore {
+  /** 所有事务内读写都使用 tx。嵌套事务复用 tx，随外层事务一起提交或回滚。 */
+  runInTransaction<T>(work: (tx: AppStore) => Promise<T>): Promise<T>;
+  exportSnapshot(): Promise<DatabaseSnapshot>;
+  replaceSnapshot(snapshot: DatabaseSnapshot, afterReplace?: (tx: AppStore) => Promise<void>): Promise<void>;
   save(progress: LearningProgress, status?: PathStatus): Promise<void>;
+  saveWithCas(progress: LearningProgress, expectedVersion: number | null, status?: PathStatus): Promise<void>;
   listPathSummaries(): Promise<PathSummaryRecord[]>;
   getLatestOpenInteraction(): Promise<StoredInteraction | null>;
+  listOpenInteractionsByPath(pathId: string): Promise<StoredInteraction[]>;
+  findInteractionBySubmission(submissionId: string): Promise<StoredInteraction | null>;
+  appendDomainEvent(event: StoredDomainEvent): Promise<void>;
+  /** 按提交顺序倒序读取路径的领域事件。 */
+  listDomainEvents(pathId: string, limit?: number): Promise<StoredDomainEvent[]>;
+  deleteDomainEventsByPath(pathId: string): Promise<void>;
 }
 
 export { MemoryAppStore, MemorySecretStore } from "./memory.js";
+export { databaseSchemaVersion } from "./migrations.js";

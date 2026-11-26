@@ -1,4 +1,4 @@
-import { MasterySessionError, masteryModeLabels, masteryNextLabels } from "@learn-pace/app-host";
+import { MasterySessionError, RestoreGateError, masteryModeLabels, masteryNextLabels } from "@learn-pace/app-host";
 import type { SessionMode } from "@learn-pace/domain";
 import { Stack, useLocalSearchParams, useRouter } from "expo-router";
 import { useCallback, useRef, useState, type ComponentRef } from "react";
@@ -74,7 +74,7 @@ export default function MasteryPath() {
     setBusy(true);
     setError(undefined);
     void work().catch((cause: unknown) => {
-      setError(cause instanceof MasterySessionError ? cause.message : "无法完成操作，请重试");
+      setError(cause instanceof MasterySessionError || cause instanceof RestoreGateError ? cause.message : "无法完成操作，请重试");
     }).finally(() => { running.current = false; setBusy(false); });
   }
 

@@ -1,5 +1,6 @@
-import type { AppStore, Clock, StoredMessage, StoredSession } from "@learn-pace/infra";
+import { VersionConflictError, type AppStore, type Clock, type StoredMessage, type StoredSession } from "@learn-pace/infra";
 import { requestModelId, type AgentRuntime, type ModelConfig, type RuntimeTurnRequest } from "@learn-pace/runtime";
+import { restoreGateFor } from "./restore-gate.js";
 
 export interface ChatQuote {
   text: string;
@@ -40,6 +41,21 @@ function promptWithQuotes(message: StoredMessage): string {
 function sourceId(reply: StoredMessage): string | undefined {
   const id = reply.metadata?.source_user_message_id;
   return typeof id === "string" ? id : undefined;
+}
+
+export function interruptedReplies(session: StoredSession, messages: readonly StoredMessage[]) {
+  const answered = new Set(messages.filter(({ role }) => role === "assistant").map(sourceId));
+  const repairs: (Omit<StoredMessage, "message_id"> & { message_id?: string })[] = [];
+  for (const message of messages) {
+    if (message.role === "assistant" && message.status === "generating") {
+      repairs.push({ ...message, status: "interrupted" });
+    } else if (message.role === "user" && message.status === "committed" && !answered.has(message.message_id)) {
+      repairs.push({ session_id: session.session_id, role: "assistant", content: "", status: "interrupted",
+        turn_id: message.turn_id, created_at: message.created_at + 0.0005,
+        metadata: { source_user_message_id: message.message_id, model_id: message.metadata?.model_id ?? session.model_id } });
+    }
+  }
+  return repairs;
 }
 
 function boundedHistory(messages: readonly StoredMessage[]): History {
@@ -106,6 +122,7 @@ export class ChatTurns {
     private readonly clock: Clock,
     private readonly makeId: () => string,
     private readonly getModelConfig: () => Promise<ModelConfig | null>,
+    private readonly restoreGate = restoreGateFor(store),
   ) {}
 
   running(scope: string) { return this.active.get(scope)?.session; }
@@ -121,14 +138,16 @@ export class ChatTurns {
 
   async exclusively<T>(scope: string, session: string, action: (signal: AbortSignal) => Promise<T>,
     busy = "此对话正在处理另一项操作"): Promise<T> {
-    if (this.active.has(scope)) throw new ChatTurnError(busy);
-    const controller = new AbortController();
-    this.active.set(scope, { session, controller });
-    try {
-      return await action(controller.signal);
-    } finally {
-      this.active.delete(scope);
-    }
+    return this.restoreGate.write(async () => {
+      if (this.active.has(scope)) throw new ChatTurnError(busy);
+      const controller = new AbortController();
+      this.active.set(scope, { session, controller });
+      try {
+        return await action(controller.signal);
+      } finally {
+        this.active.delete(scope);
+      }
+    });
   }
 
   observeMessages(sessionId: string, observer: MessageObserver): () => void {
@@ -139,25 +158,6 @@ export class ChatTurns {
       observers.delete(observer);
       if (!observers.size) this.observers.delete(sessionId);
     };
-  }
-
-  async recover(session: StoredSession): Promise<void> {
-    const messages = await this.store.listMessages(session.session_id);
-    const answered = new Set(messages.filter(({ role }) => role === "assistant").map(sourceId));
-    for (const message of messages) {
-      if (message.role === "assistant" && message.status === "generating") {
-        await this.store.saveMessage({ ...message, status: "interrupted" });
-      } else if (message.role === "user" && message.status === "committed" && !answered.has(message.message_id)) {
-        await this.store.saveMessage({
-          message_id: this.makeId(), session_id: session.session_id, role: "assistant",
-          content: "", status: "interrupted", turn_id: message.turn_id, created_at: message.created_at + 0.0005,
-          metadata: {
-            source_user_message_id: message.message_id,
-            model_id: message.metadata?.model_id ?? session.model_id,
-          },
-        });
-      }
-    }
   }
 
   async send(session: StoredSession, content: string, quotes: readonly ChatQuote[], prepare: PrepareTurn,
@@ -233,8 +233,12 @@ export class ChatTurns {
     });
 
     let content = "";
+    let conflict: VersionConflictError | undefined;
     const prepared = await prepare(session, config, { user, turnId: reply.turn_id!, signal, deliveredText: () => content })
-      .catch(() => undefined);
+      .catch((error: unknown) => {
+        if (error instanceof VersionConflictError) conflict = error;
+        return undefined;
+      });
     const { runtime, options, allowedTools = [], toolSettled, onToolActivity, replyMetadata, measure } = prepared ?? {};
     const started = performance.now();
     let ttft: number | null = null;
@@ -283,12 +287,13 @@ export class ChatTurns {
     await writes;
     const terminal: StoredMessage = {
       ...reply, content, status,
-      metadata: { ...reply.metadata, ...replyMetadata?.(), ...(status === "failed" ? { error: localizedFailure(error ?? "") } : {}),
+      metadata: { ...reply.metadata, ...replyMetadata?.(), ...(status === "failed" ? { error: conflict?.message ?? localizedFailure(error ?? "") } : {}),
         ...(measure && { runtime: { ttft_ms: ttft, total_ms: Math.round(performance.now() - started), rounds, tools } }),
       },
     };
     await this.store.saveMessage(terminal);
     this.publish(terminal, onMessage);
+    if (conflict) throw conflict;
     return terminal;
   }
 

@@ -3,6 +3,9 @@ import { expect, it } from "vitest";
 import {
   MemoryAppStore, MemorySecretStore, type StoredMessage, type StoredSession,
 } from "../index.js";
+import { testTransactionalStore } from "./store-transactions.js";
+
+testTransactionalStore(async () => new MemoryAppStore());
 
 const session: StoredSession = {
   session_id: "parent", kind: "chat", path_id: null, mode: null, title: "Ratios",

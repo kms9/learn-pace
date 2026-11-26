@@ -3,6 +3,7 @@ import { PiDurableRuntime, type ModelConfig } from "@learn-pace/runtime";
 import { ChatTurns, ChatTurnError as Lf01ChatError, limitText, turnFrom,
   type ChatQuote, type History, type MessageObserver, type PrepareTurn } from "./chat-turns.js";
 import { registerMasteryNavigation, type MasteryHandoff } from "./mastery/nav-tools.js";
+import { restoreGateFor } from "./restore-gate.js";
 export { ChatTurnError as Lf01ChatError, messageQuotes, type ChatQuote } from "./chat-turns.js";
 
 export interface ChatSelection {
@@ -53,8 +54,9 @@ export class Lf01ChatService {
     private readonly makeId: () => string,
     getModelConfig: () => Promise<ModelConfig | null>,
     private readonly fetch?: typeof globalThis.fetch,
+    private readonly restoreGate = restoreGateFor(store),
   ) {
-    this.turns = new ChatTurns(store, clock, makeId, getModelConfig);
+    this.turns = new ChatTurns(store, clock, makeId, getModelConfig, restoreGate);
   }
 
   async createSession(): Promise<StoredSession> {
@@ -63,8 +65,10 @@ export class Lf01ChatService {
       session_id: this.makeId(), kind: "lf01", title: "新对话", path_id: null, mode: null,
       model_id: null, created_at: now, updated_at: now,
     };
-    await this.store.saveSession(session);
-    return session;
+    return this.restoreGate.write(async () => {
+      await this.store.saveSession(session);
+      return session;
+    });
   }
 
   async listSessions(): Promise<StoredSession[]> {
@@ -86,13 +90,6 @@ export class Lf01ChatService {
 
   stop(sessionId: string): void {
     this.turns.stop(sessionId, sessionId);
-  }
-
-  async recoverInterruptedTurns(): Promise<void> {
-    for (const session of await this.store.listSessions()) {
-      if (!this.supportsChat(session) || this.isRunning(session.session_id)) continue;
-      await this.exclusively(session.session_id, () => this.turns.recover(session));
-    }
   }
 
   async send(sessionId: string, content: string, quotes: readonly ChatQuote[] = [], onMessage?: MessageObserver) {
@@ -177,10 +174,12 @@ export class Lf01ChatService {
   }
 
   async detachThread(id: string): Promise<void> {
-    const thread = await this.requireThread(id);
-    if (thread.detached_at !== null) return;
-    const now = this.clock.nowSeconds();
-    await this.store.updateThread({ ...thread, detached_at: now, updated_at: now });
+    return this.restoreGate.write(async () => {
+      const thread = await this.requireThread(id);
+      if (thread.detached_at !== null) return;
+      const now = this.clock.nowSeconds();
+      await this.store.updateThread({ ...thread, detached_at: now, updated_at: now });
+    });
   }
 
   async deleteThread(id: string): Promise<void> {

@@ -1,4 +1,4 @@
-import { MasterySessionError, type TopicMaterial } from "@learn-pace/app-host";
+import { MasterySessionError, RestoreGateError, type TopicMaterial } from "@learn-pace/app-host";
 import type { StoredMessage, StoredSession } from "@learn-pace/infra";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { useHeaderHeight } from "expo-router/react-navigation";
@@ -99,7 +99,7 @@ export default function NewMasteryTopic() {
       });
       router.replace({ pathname: "/mastery/[pathId]/session/[sessionId]", params: { pathId, sessionId: session.session_id } });
     } catch (cause) {
-      setError(cause instanceof MasterySessionError ? cause.message : "无法创建精通目标，请重试");
+      setError(cause instanceof MasterySessionError || cause instanceof RestoreGateError ? cause.message : "无法创建精通目标，请重试");
     } finally {
       working.current = false;
       setBusy(false);

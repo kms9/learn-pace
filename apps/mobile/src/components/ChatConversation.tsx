@@ -1,4 +1,4 @@
-import { Lf01ChatError, messageQuotes, renderedChatSelections, type ChatQuote, type ChatSelection } from "@learn-pace/app-host";
+import { Lf01ChatError, RestoreGateError, messageQuotes, renderedChatSelections, type ChatQuote, type ChatSelection } from "@learn-pace/app-host";
 import type { StoredMessage } from "@learn-pace/infra";
 import * as Clipboard from "expo-clipboard";
 import { useRouter } from "expo-router";
@@ -31,7 +31,7 @@ type Properties = {
 };
 
 function feedback(error: unknown): string {
-  return error instanceof Lf01ChatError ? error.message : "无法完成操作，请重试";
+  return error instanceof Lf01ChatError || error instanceof RestoreGateError ? error.message : "无法完成操作，请重试";
 }
 
 export function ChatConversation({

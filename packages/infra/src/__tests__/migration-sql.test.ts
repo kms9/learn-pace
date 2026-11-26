@@ -6,17 +6,39 @@ import { createLearningProgress, createPendingQuestion } from "@learn-pace/domai
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { MemoryAppStore } from "../index.js";
 import { ExpoLearningStore } from "../expo.js";
+import { testTransactionalStore } from "./store-transactions.js";
 
 let db: DatabaseSync;
 let dir: string;
 
 vi.mock("expo-secure-store", () => ({}));
+function sqliteConnection(connection: DatabaseSync) {
+  return {
+    execAsync: async (sql: string) => connection.exec(sql),
+    getFirstAsync: async (sql: string, ...params: SQLInputValue[]) => connection.prepare(sql).get(...params) ?? null,
+    getAllAsync: async (sql: string, ...params: SQLInputValue[]) => connection.prepare(sql).all(...params),
+    runAsync: async (sql: string, ...params: SQLInputValue[]) => connection.prepare(sql).run(...params),
+  };
+}
+
 vi.mock("expo-sqlite", () => ({
   openDatabaseAsync: async () => ({
-    execAsync: async (sql: string) => db.exec(sql),
-    getFirstAsync: async (sql: string, ...params: SQLInputValue[]) => db.prepare(sql).get(...params) ?? null,
-    getAllAsync: async (sql: string, ...params: SQLInputValue[]) => db.prepare(sql).all(...params),
-    runAsync: async (sql: string, ...params: SQLInputValue[]) => db.prepare(sql).run(...params),
+    ...sqliteConnection(db),
+    withExclusiveTransactionAsync: async (work: (tx: ReturnType<typeof sqliteConnection>) => Promise<void>) => {
+      const txn = new DatabaseSync(join(dir, "learn-pace.db"));
+      try {
+        txn.exec("BEGIN EXCLUSIVE");
+        try {
+          await work(sqliteConnection(txn));
+          txn.exec("COMMIT");
+        } catch (error) {
+          txn.exec("ROLLBACK");
+          throw error;
+        }
+      } finally {
+        txn.close();
+      }
+    },
     closeAsync: async () => {},
   }),
 }));
@@ -31,9 +53,23 @@ afterEach(() => {
   rmSync(dir, { recursive: true, force: true });
 });
 
-it("opens a new WAL database and round-trips the v4 repositories", async () => {
+testTransactionalStore(() => ExpoLearningStore.open());
+
+it("keeps the SQL version column synchronized with the stored progress JSON", async () => {
   const store = await ExpoLearningStore.open();
-  expect(db.prepare("PRAGMA user_version").get()).toMatchObject({ user_version: 4 });
+  const progress = createLearningProgress({ book_id: "p" });
+  await store.saveWithCas(progress, null);
+  await store.saveWithCas({ ...progress, version: 1 }, 0);
+  expect(db.prepare("SELECT version, json_extract(progress, '$.version') AS json_version FROM learning_progress").get())
+    .toEqual({ version: 1, json_version: 1 });
+  await store.save({ ...progress, version: 7 });
+  expect(db.prepare("SELECT version, json_extract(progress, '$.version') AS json_version FROM learning_progress").get())
+    .toEqual({ version: 7, json_version: 7 });
+});
+
+it("opens a new WAL database and round-trips the v5 repositories", async () => {
+  const store = await ExpoLearningStore.open();
+  expect(db.prepare("PRAGMA user_version").get()).toMatchObject({ user_version: 5 });
   expect(await store.inspect()).toMatchObject({ journalMode: "wal", paths: 0 });
   const session = {
     session_id: "s", kind: "chat", path_id: null, mode: null, title: "Ratios",
@@ -107,12 +143,13 @@ it.each([0, 1])("migrates populated v%s data and resumes a partial migration", a
   expect(await reopened.listPathSummaries()).toEqual([
     { path_id: "old", name: "Renamed", status: "draft", updated_at: 200 },
   ]);
-  expect(db.prepare("PRAGMA user_version").get()).toMatchObject({ user_version: 4 });
+  expect(db.prepare("PRAGMA user_version").get()).toMatchObject({ user_version: 5 });
 });
 
-it.each([false, true])("preserves v2 threads during v4 upgrade (partial=%s)", async (partial) => {
+it.each([false, true])("preserves v2 threads during v5 upgrade (partial=%s)", async (partial) => {
   db.exec(`
     PRAGMA user_version = 2;
+    CREATE TABLE learning_progress (path_id TEXT PRIMARY KEY NOT NULL, progress TEXT NOT NULL);
     CREATE TABLE session_threads (
       thread_id TEXT PRIMARY KEY NOT NULL, parent_session_id TEXT NOT NULL, source_message_id TEXT NOT NULL,
       selected_text TEXT NOT NULL, title TEXT NOT NULL, created_at REAL NOT NULL, updated_at REAL NOT NULL
@@ -129,12 +166,14 @@ it.each([false, true])("preserves v2 threads during v4 upgrade (partial=%s)", as
     selected_text: "old selection", title: "Follow-up", created_at: 1, updated_at: 2,
     selection_start: partial ? 3 : null, selection_end: null, detached_at: null,
   });
-  expect(db.prepare("PRAGMA user_version").get()).toMatchObject({ user_version: 4 });
+  expect(await (await ExpoLearningStore.open()).getThread("child")).toEqual(await store.getThread("child"));
+  expect(db.prepare("PRAGMA user_version").get()).toMatchObject({ user_version: 5 });
 });
 
-it("migrates a populated v3 interaction table to v4", async () => {
+it("migrates a populated v3 interaction table to v5", async () => {
   db.exec(`
     PRAGMA user_version = 3;
+    CREATE TABLE learning_progress (path_id TEXT PRIMARY KEY NOT NULL, progress TEXT NOT NULL);
     CREATE TABLE interactions (interaction_id TEXT PRIMARY KEY NOT NULL, path_id TEXT NOT NULL,
       session_id TEXT NOT NULL, turn_id TEXT NOT NULL,
       status TEXT NOT NULL CHECK (status IN ('awaiting_input', 'answered', 'graded')), question TEXT NOT NULL,
@@ -143,13 +182,15 @@ it("migrates a populated v3 interaction table to v4", async () => {
   `);
   const question = createPendingQuestion({ question_id: "q", knowledge_point_id: "kp" });
   for (const status of ["awaiting_input", "answered", "graded"]) {
-    db.prepare("INSERT INTO interactions VALUES (?, 'p', 's', 't', ?, ?, 'raw', 'sub', 12)")
-      .run(status, status, JSON.stringify(question));
+    db.prepare("INSERT INTO interactions VALUES (?, 'p', 's', 't', ?, ?, 'raw', ?, 12)")
+      .run(status, status, JSON.stringify(question), `sub-${status}`);
   }
   const store = await ExpoLearningStore.open();
-  expect(db.prepare("PRAGMA user_version").get()).toMatchObject({ user_version: 4 });
+  expect(db.prepare("PRAGMA user_version").get()).toMatchObject({ user_version: 5 });
   for (const status of ["awaiting_input", "answered", "graded"]) {
-    expect(await store.getInteraction(status)).toMatchObject({ status, question, raw_answer: "raw", submission_id: "sub" });
+    expect(await (await ExpoLearningStore.open()).getInteraction(status)).toMatchObject({
+      status, question, raw_answer: "raw", submission_id: `sub-${status}`,
+    });
     await store.abandonInteraction(status, 13);
   }
   expect(await store.getOpenInteraction("p")).toBeNull();
@@ -159,6 +200,53 @@ it("migrates a populated v3 interaction table to v4", async () => {
   expect(await store.getInteraction("graded")).toBeNull();
 });
 
+it("upgrades v4 in place, preserves old messages and keeps the latest duplicate submission", async () => {
+  db.exec(`
+    PRAGMA user_version = 4;
+    CREATE TABLE learning_progress (
+      path_id TEXT PRIMARY KEY NOT NULL, progress TEXT NOT NULL, name TEXT, status TEXT, updated_at REAL
+    );
+    CREATE TABLE interactions (interaction_id TEXT PRIMARY KEY NOT NULL, path_id TEXT NOT NULL,
+      session_id TEXT NOT NULL, turn_id TEXT NOT NULL,
+      status TEXT NOT NULL CHECK (status IN ('awaiting_input', 'answered', 'graded', 'abandoned')),
+      question TEXT NOT NULL, raw_answer TEXT, submission_id TEXT, updated_at REAL NOT NULL);
+    CREATE TABLE messages (message_id TEXT PRIMARY KEY, metadata TEXT);
+    INSERT INTO messages VALUES ('original', '{"mastery_answer":{"submission_id":"duplicate"}}');
+  `);
+  const progress = { ...createLearningProgress({ book_id: "p", name: "Ratios" }), version: 7 };
+  db.prepare("INSERT INTO learning_progress VALUES ('p', ?, 'Ratios', 'active', 8)").run(JSON.stringify(progress));
+  db.exec("INSERT INTO learning_progress VALUES ('legacy', '{}', '', 'active', 0)");
+  const question = createPendingQuestion({ question_id: "q", knowledge_point_id: "kp" });
+  const insert = db.prepare("INSERT INTO interactions VALUES (?, 'p', 's', 't', 'answered', ?, 'raw', 'duplicate', ?)");
+  for (const [id, time] of [["z-older", 1], ["a-tie", 2], ["b-keep", 2]] as const) {
+    insert.run(id, JSON.stringify(question), time);
+  }
+  db.exec(`CREATE TRIGGER fail_dedup BEFORE UPDATE OF submission_id ON interactions
+    BEGIN SELECT RAISE(ABORT, 'injected migration failure'); END`);
+  await expect(ExpoLearningStore.open()).rejects.toThrow("injected migration failure");
+  expect(db.prepare("PRAGMA user_version").get()).toMatchObject({ user_version: 4 });
+  expect(db.prepare("SELECT name FROM pragma_table_info('learning_progress') WHERE name = 'version'").get()).toBeUndefined();
+  expect(db.prepare("SELECT COUNT(*) AS count FROM interactions WHERE submission_id = 'duplicate'").get())
+    .toMatchObject({ count: 3 });
+  db.exec("DROP TRIGGER fail_dedup");
+  await ExpoLearningStore.open();
+  const reopened = await ExpoLearningStore.open();
+  expect(db.prepare("PRAGMA user_version").get()).toMatchObject({ user_version: 5 });
+  expect(await reopened.get("p")).toEqual(progress);
+  expect(db.prepare("SELECT path_id, version FROM learning_progress ORDER BY path_id").all()).toEqual([
+    { path_id: "legacy", version: 0 }, { path_id: "p", version: 7 },
+  ]);
+  expect((await reopened.listInteractionsBySession("s")).map(({ interaction_id, submission_id, raw_answer }) =>
+    [interaction_id, submission_id, raw_answer])).toEqual([
+    ["z-older", null, "raw"], ["a-tie", null, "raw"], ["b-keep", "duplicate", "raw"],
+  ]);
+  expect(() => insert.run("new", JSON.stringify(question), 3)).toThrow(/UNIQUE constraint/);
+  expect(db.prepare("SELECT metadata FROM messages").get()).toMatchObject({
+    metadata: '{"mastery_answer":{"submission_id":"duplicate"}}',
+  });
+  expect(db.prepare("SELECT COUNT(*) AS count FROM domain_events").get()).toMatchObject({ count: 0 });
+});
+
 it.each(["expo", "memory"])("round-trips staged group answers and grades with %s storage", async (backend) => {
   const store = backend === "expo" ? await ExpoLearningStore.open() : new MemoryAppStore();
   const question = createPendingQuestion({ question_id: "group", knowledge_point_id: "point", question_type: "group",
@@ -166,7 +254,7 @@ it.each(["expo", "memory"])("round-trips staged group answers and grades with %s
   const first = { path_id: "path", interaction_id: "i", session_id: "session", turn_id: "turn",
     status: "answered" as const, raw_answer: JSON.stringify({ leaf: "原答案" }), submission_id: "submission", updated_at: 2, question };
   await store.insertInteraction(first);
-  await store.insertInteraction({ ...first, interaction_id: "another", session_id: "foreign" });
+  await store.insertInteraction({ ...first, interaction_id: "another", session_id: "foreign", submission_id: null });
   const reopened = backend === "expo" ? await ExpoLearningStore.open() : store;
   expect(await reopened.listInteractionsBySession("session")).toEqual([first]);
 

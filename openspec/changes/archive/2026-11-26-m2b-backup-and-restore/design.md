@@ -60,7 +60,7 @@
     - 绝不删除或改写本机 `SecureStore` 中已有槽位；
     - 若恢复前本机已有配置且 `new URL(local.baseUrl).origin === new URL(restored.baseUrl).origin` 且本机 `SecureStore` 存在有效 Key，则恢复后的记录绑定回本机原 `credentialRef`；
     - 否则（本机未配置或网关 origin 不同）强制写入 `credentialRef: null`，明确要求用户为新网关填写 API Key；
-    - **退役而非遗弃本机槽位**：不再被引用的本机槽位（恢复前本机配置的 `credentialRef`，以及其已有的 `retiredCredentialRefs`）合并去重后写入恢复后记录的 `retiredCredentialRefs`。恢复过程本身不删除任何 `SecureStore` 槽位，误恢复后仍可通过再次恢复原备份找回绑定。
+    - 不再被引用的本机槽位（恢复前本机配置的 `credentialRef`，以及其已有的 `retiredCredentialRefs`）合并去重后写入恢复后记录的 `retiredCredentialRefs`。恢复期间保留这些 `SecureStore` 槽位。设备从网关 A 的配置恢复到 B，再恢复 A 的备份时，A 保持未绑定，学习者需重新填写 Key。
   - **退役槽位的清理（`saveModelSettings`）**：
     - 带新 Key 保存且配置写入成功后，删除 `current.credentialRef`（非 `null` 时）与全部 `retiredCredentialRefs`，新记录不再携带该字段；
     - 不带新 Key 保存时，`current.credentialRef === null` 一律按缺少凭据处理并抛「请输入目标网关的 API Key」；成功路径原样保留 `retiredCredentialRefs`；

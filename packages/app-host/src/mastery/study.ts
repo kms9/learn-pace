@@ -2,18 +2,19 @@ import {
   applyGrade, correctAnswerKey, findKnowledgePoint, isMastered, isReadableChoiceAnswer,
   publicPendingQuestion, QUALITATIVE_TYPES, qualitativeEvidenceId, questionWithAnswerKey,
   recordQualitativeAssessment, schedulerForProgress, voidAttempt,
-  type FinalGrade, type KnowledgePoint, type LearningProgress, type PendingQuestion, type SessionMode,
+  type FinalGrade, type KnowledgePoint, type LearningEvidence, type LearningProgress, type PendingQuestion, type SessionMode,
 } from "@learn-pace/domain";
-import type { AppStore, InteractionGrade, QuestionGrade, StoredInteraction } from "@learn-pace/infra";
+import { SubmissionConflictError, type AppStore, type InteractionGrade, type QuestionGrade, type StoredDomainEvent, type StoredInteraction } from "@learn-pace/infra";
 import {
   assessSemantically, requestModelId, validateStudyQuestion, type AssessmentVerdict, type ModelConfig,
 } from "@learn-pace/runtime";
 import { ChatTurnError, limitText, type TurnContext } from "../chat-turns.js";
+import { requireProgressVersion, saveProgress } from "./persistence.js";
 
 export type Answers = Record<string, string>;
 export interface MasteryAnswer {
   interaction_id: string;
-  submission_id: string;
+  submission_id: string | null;
   answers: Answers;
 }
 
@@ -41,18 +42,52 @@ export function projectStudyCard(row: StoredInteraction) {
 export type StudyCard = ReturnType<typeof projectStudyCard>;
 
 const exists = (row: StoredInteraction) => row.status === "awaiting_input" || row.status === "answered";
-const evidenceKey = (row: StoredInteraction, question: PendingQuestion) =>
+export const evidenceKey = (row: StoredInteraction, question: PendingQuestion) =>
   row.question.questions.length ? `${row.interaction_id}:${question.question_id}` : row.interaction_id;
 
-function partReceipt(question: PendingQuestion, verdict: AssessmentVerdict): QuestionGrade {
+export class StaleInteractionError extends ChatTurnError {
+  constructor(message = "该题卡已结束，请查看最新题卡。") {
+    super(message);
+    this.name = "StaleInteractionError";
+  }
+}
+
+function encodeAnswers(row: StoredInteraction, answers: Answers): string {
+  if (!row.question.questions.length) return answers[row.question.question_id] ?? "";
+  return JSON.stringify(Object.fromEntries(questionLeaves(row.question).flatMap(({ question_id }) =>
+    Object.hasOwn(answers, question_id) ? [[question_id, answers[question_id]]] : [])));
+}
+
+function mergeAnswers(row: StoredInteraction, answers: Answers): Answers {
+  const leaves = questionLeaves(row.question);
+  const draft = savedAnswers(row);
+  for (const [id, value] of Object.entries(answers)) {
+    if (typeof value !== "string" || !leaves.some(({ question_id }) => question_id === id)) {
+      throw new ChatTurnError("作答不属于这张题卡");
+    }
+    if (!row.grade?.questions[id]?.voided) draft[id] = value;
+  }
+  return draft;
+}
+
+export function partReceipt(question: PendingQuestion, verdict: AssessmentVerdict): QuestionGrade {
   if (!verdict.final) return verdict;
   return { ...verdict, ...(question.explanation && { explanation: question.explanation }),
     ...(question.question_type === "choice" && { correct_option: question.expected_answer }),
     reference_answer: verdict.reference_answer ?? question.expected_answer };
 }
 
-function ready(row: StoredInteraction, grades: InteractionGrade["questions"]) {
+export function ready(row: StoredInteraction, grades: InteractionGrade["questions"]) {
   return questionLeaves(row.question).every(({ question_id }) => grades[question_id]?.final || grades[question_id]?.voided);
+}
+
+export function verdictFromEvidence(evidence: LearningEvidence): AssessmentVerdict {
+  return { final: true, result: evidence.result, confidence: evidence.confidence ?? 1,
+    feedback: evidence.feedback, reference_answer: evidence.reference_answer || undefined };
+}
+
+function sameSubmission(current: StoredInteraction | null, before: StoredInteraction): current is StoredInteraction {
+  return !!current && current.status === before.status && current.submission_id === before.submission_id;
 }
 
 function turnReceipt(row: StoredInteraction) {
@@ -101,31 +136,70 @@ export class StudyInteractions {
     return { ok: true, interaction_id: id, question: publicPendingQuestion(question) };
   }
 
-  async requireCard(scope: Scope, id?: string) {
-    const row = id ? await this.store.getInteraction(id) : await this.store.getOpenInteraction(scope.pathId);
+  async requireCard(scope: Scope, id?: string, store = this.store) {
+    const row = id ? await store.getInteraction(id) : await store.getOpenInteraction(scope.pathId);
     if (!row || row.path_id !== scope.pathId || row.session_id !== scope.sessionId) {
-      throw new ChatTurnError("找不到本会话的题卡，请返回出题会话处理");
+      throw new StaleInteractionError("找不到本会话的题卡，请返回出题会话查看最新题卡。");
     }
     return row;
   }
 
-  async stage(row: StoredInteraction, answers: Answers) {
-    if (!exists(row)) throw new ChatTurnError("该题卡已结束");
-    const leaves = questionLeaves(row.question);
+  async submit(scope: Scope, interactionId: string, answers: Answers, submissionId: string) {
+    if (!submissionId.trim()) throw new ChatTurnError("缺少作答提交编号，请刷新题卡后重试。");
+    return this.store.runInTransaction(async (tx) => {
+      const row = await this.requireCard(scope, interactionId, tx);
+      const existing = await tx.findInteractionBySubmission(submissionId);
+      if (existing && existing.interaction_id !== interactionId) throw new SubmissionConflictError();
+
+      if (existing) {
+        const previous = savedAnswers(row);
+        const draft = mergeAnswers(row, answers);
+        if (encodeAnswers(row, draft) !== encodeAnswers(row, previous) || Object.entries(answers).some(([id, value]) =>
+          row.grade?.questions[id]?.voided && value !== previous[id])) throw new SubmissionConflictError();
+        if (row.status === "graded" || row.status === "awaiting_input" && Object.keys(answers).every((id) =>
+          row.grade?.questions[id]?.final || row.grade?.questions[id]?.voided)) {
+          return { kind: "receipt" as const, card: projectStudyCard(row) };
+        }
+        if (row.status === "answered") return { kind: "staged" as const, row };
+        if (row.status !== "awaiting_input") throw new StaleInteractionError();
+        const pending = { ...row, status: "answered" as const, updated_at: this.now() };
+        await tx.updateInteraction(pending);
+        return { kind: "staged" as const, row: pending };
+      }
+
+      if (!exists(row)) throw new StaleInteractionError();
+      const draft = mergeAnswers(row, answers);
+      if (questionLeaves(row.question).some(({ question_id }) => {
+        const grade = row.grade?.questions[question_id];
+        return !grade?.final && !grade?.voided && !draft[question_id]?.trim();
+      })) {
+        throw new ChatTurnError("请完成所有未批改的小题后再提交");
+      }
+      return { kind: "staged" as const, row: await this.stage(row, draft, submissionId, tx, row.turn_id) };
+    });
+  }
+
+  private async stage(row: StoredInteraction, answers: Answers, submissionId: string, tx: AppStore, turnId: string) {
+    if (!exists(row)) throw new StaleInteractionError();
     const previous = savedAnswers(row);
-    const draft: Answers = { ...previous };
     for (const [id, value] of Object.entries(answers)) {
-      if (!leaves.some(({ question_id }) => question_id === id) || typeof value !== "string") throw new ChatTurnError("作答不属于这张题卡");
       const grade = row.grade?.questions[id];
-      if (grade?.voided) continue;
       if (grade?.final && value !== previous[id]) throw new ChatTurnError("已批改的小题需通过复核调整");
-      draft[id] = value;
     }
-    if (!Object.values(draft).some((value) => value.trim())) throw new ChatTurnError("请先填写作答");
-    const next: StoredInteraction = { ...row, status: "answered", submission_id: this.makeId(), updated_at: this.now(),
-      raw_answer: row.question.questions.length ? JSON.stringify(draft) : draft[row.question.question_id]! };
-    await this.store.updateInteraction(next);
+    if (!Object.values(answers).some((value) => value.trim())) throw new ChatTurnError("请先填写作答");
+    const now = this.now();
+    const next: StoredInteraction = { ...row, status: "answered", submission_id: submissionId, updated_at: now,
+      raw_answer: encodeAnswers(row, answers) };
+    await tx.updateInteraction(next);
+    await this.appendEvent(tx, { pathId: row.path_id, sessionId: row.session_id }, turnId, "AnswerRecorded", now,
+      { interaction_id: row.interaction_id, submission_id: submissionId });
     return next;
+  }
+
+  private appendEvent(tx: AppStore, scope: Scope, turnId: string, eventType: StoredDomainEvent["event_type"],
+    now: number, payload: StoredDomainEvent["payload"]) {
+    return tx.appendDomainEvent({ event_id: this.makeId(), path_id: scope.pathId, session_id: scope.sessionId,
+      turn_id: turnId, event_type: eventType, payload, created_at: now });
   }
 
   async pregrade(context: StudyTurn) {
@@ -134,7 +208,8 @@ export class StudyInteractions {
     const row = await this.requireCard(context, submission.interaction_id);
     if (row.submission_id !== submission.submission_id || row.status === "abandoned") return undefined;
     if (row.status !== "answered") return turnReceipt(row);
-    return turnReceipt(await this.grade(row, context));
+    const graded = await this.grade(row, context);
+    return graded && turnReceipt(graded);
   }
 
   async gradeFromTurn(context: StudyTurn, input: { question_id?: string; answer?: string; answers?: Answers }) {
@@ -165,7 +240,14 @@ export class StudyInteractions {
       }
       answers = { [chosen.question_id]: value };
     } else throw new ChatTurnError("题组可按小题 ID 提供已作答的部分");
-    return turnReceipt(await this.grade(await this.stage(row, answers), context));
+    const staged = await this.store.runInTransaction(async (tx) => {
+      const current = await this.requireCard(context, row.interaction_id, tx);
+      if (!sameSubmission(current, row)) throw new StaleInteractionError();
+      return this.stage(current, mergeAnswers(current, answers), this.makeId(), tx, context.turn.turnId);
+    });
+    const graded = await this.grade(staged, context);
+    if (!graded) throw new StaleInteractionError();
+    return turnReceipt(graded);
   }
 
   private async pregradedReceipt(context: StudyTurn, attempt: MasteryAnswer) {
@@ -174,7 +256,7 @@ export class StudyInteractions {
     return turnReceipt(row);
   }
 
-  private async grade(row: StoredInteraction, context: StudyTurn): Promise<StoredInteraction> {
+  private async grade(row: StoredInteraction, context: StudyTurn): Promise<StoredInteraction | undefined> {
     const start = performance.now();
     const answers = savedAnswers(row);
     const prior = await this.read(context.pathId);
@@ -186,32 +268,45 @@ export class StudyInteractions {
         const answer = answers[id];
         if (!answer?.trim() || grades[id]?.final || grades[id]?.voided) continue;
         const evidence = prior.learning_evidence.find((item) => item.evidence_id === evidenceKey(row, question));
-        const verdict: AssessmentVerdict = evidence ? { final: true, result: evidence.result,
-          confidence: evidence.confidence ?? 1, feedback: evidence.feedback, reference_answer: evidence.reference_answer } :
+        const verdict = evidence ? verdictFromEvidence(evidence) :
           await assessSemantically(context.config, { question, learner_answer: answer, signal: context.turn.signal }, this.fetch);
         grades[id] = partReceipt(question, verdict);
         if (verdict.final && !evidence) final.push({ question, verdict });
       }
     } catch {
-      const failed = { ...row, grade: { questions: row.grade?.questions ?? {},
-        grading_failed: true, elapsed_ms: Math.round(performance.now() - start) } };
-      await this.store.updateInteraction(failed);
-      return failed;
+      return this.store.runInTransaction(async (tx) => {
+        const current = await tx.getInteraction(row.interaction_id);
+        if (current?.status !== "answered" || !sameSubmission(current, row)) return undefined;
+        await requireProgressVersion(tx, prior);
+        const failed = { ...current, grade: { questions: current.grade?.questions ?? {},
+          grading_failed: true, elapsed_ms: Math.round(performance.now() - start) } };
+        await tx.updateInteraction(failed);
+        return failed;
+      });
     }
-    const now = this.now();
-    const scheduler = schedulerForProgress(prior);
-    const next = final.reduce((value, { question, verdict }) => applyGrade(value, {
-      evidence_id: evidenceKey(row, question), question_id: question.question_id, knowledge_point_id: question.knowledge_point_id,
-      learner_answer: answers[question.question_id]!, session_id: row.session_id, turn_id: context.turn.turnId,
-      verdict, assistance_used: question.assistance_used,
-      visual_context: { ...question.visual_context, session_mode: context.mode() },
-    }, scheduler, now), prior);
-    if (next !== prior) await this.save(next);
-    const graded: StoredInteraction = { ...row, updated_at: now,
-      status: ready(row, grades) ? "graded" : "awaiting_input",
-      grade: { questions: grades, elapsed_ms: Math.round(performance.now() - start) } };
-    await this.store.updateInteraction(graded);
-    return graded;
+    return this.store.runInTransaction(async (tx) => {
+      const current = await tx.getInteraction(row.interaction_id);
+      if (current?.status !== "answered" || !sameSubmission(current, row)) return undefined;
+      const progress = await requireProgressVersion(tx, prior);
+      const now = this.now();
+      const scheduler = schedulerForProgress(progress);
+      const next = final.reduce((value, { question, verdict }) => applyGrade(value, {
+        evidence_id: evidenceKey(row, question), question_id: question.question_id, knowledge_point_id: question.knowledge_point_id,
+        learner_answer: answers[question.question_id]!, session_id: row.session_id, turn_id: context.turn.turnId,
+        verdict, assistance_used: question.assistance_used,
+        visual_context: { ...question.visual_context, session_mode: context.mode() },
+      }, scheduler, now), progress);
+      const graded: StoredInteraction = { ...current, updated_at: now,
+        status: ready(current, grades) ? "graded" : "awaiting_input",
+        grade: { questions: grades, elapsed_ms: Math.round(performance.now() - start) } };
+      await saveProgress(tx, next, now);
+      await tx.updateInteraction(graded);
+      await this.appendEvent(tx, context, context.turn.turnId, "AssessmentCommitted", now, {
+        interaction_id: row.interaction_id, submission_id: row.submission_id, status: graded.status,
+        evidence_ids: final.map(({ question }) => evidenceKey(row, question)),
+      });
+      return graded;
+    });
   }
 
   async assess(context: StudyTurn, pointId: string) {
@@ -223,8 +318,12 @@ export class StudyInteractions {
     const previous = progress.learning_evidence.find((item) => item.evidence_id === id);
     if (previous) return { ok: true, result: previous.result, mastered: isMastered(progress, kp), feedback: previous.feedback };
     const cardInput = context.turn.user.metadata?.mastery_answer as MasteryAnswer | undefined;
-    const answersForPoint = cardInput && questionLeaves((await this.requireCard(context, cardInput.interaction_id)).question)
-      .filter(({ knowledge_point_id }) => knowledge_point_id === pointId).map(({ question_id }) => cardInput.answers[question_id] ?? "");
+    const sourceCard = cardInput && await this.requireCard(context, cardInput.interaction_id);
+    if (sourceCard && (sourceCard.status === "abandoned" || sourceCard.submission_id !== cardInput?.submission_id)) {
+      throw new StaleInteractionError();
+    }
+    const answersForPoint = sourceCard && questionLeaves(sourceCard.question)
+      .filter(({ knowledge_point_id }) => knowledge_point_id === pointId).map(({ question_id }) => cardInput?.answers[question_id] ?? "");
     const original = answersForPoint ? answersForPoint.join("\n") : context.turn.user.content;
     if (!original.trim() || clearlyFollowUp(original) || context.turn.user.metadata?.mastery_challenge ||
         context.turn.user.metadata?.mastery_skip) throw new ChatTurnError("请先让学习者用自己的话解释");
@@ -246,18 +345,32 @@ export class StudyInteractions {
     } catch {
       throw new ChatTurnError("定性判定失败，请稍后用原话重试");
     }
+    const now = this.now();
     const assessed = verdict.final
       ? recordQualitativeAssessment(progress, { evidence_id: id, knowledge_point_id: pointId,
         learner_answer: combined, session_id: context.sessionId,
         turn_id: context.turn.turnId, verdict, model_id: requestModelId(context.config),
         assistance_used: Boolean(cardInput && latest?.assistance_used),
         visual_context: { session_mode: context.mode() },
-      }, schedulerForProgress(progress), this.now())
+      }, schedulerForProgress(progress), now)
       : progress;
-    if (assessed !== progress) await this.save(assessed);
-    await this.store.saveMessage({ ...current, metadata: { ...current.metadata, [metaKey]: {
-      ...own, [pointId]: verdict.final ? null : combined,
-    } } });
+    await this.store.runInTransaction(async (tx) => {
+      if (sourceCard && !sameSubmission(await tx.getInteraction(sourceCard.interaction_id), sourceCard)) {
+        throw new StaleInteractionError();
+      }
+      await requireProgressVersion(tx, progress);
+      const message = await tx.getMessage(current.message_id);
+      if (!message) throw new ChatTurnError("这轮作答已更新，请重新发送解释。");
+      if (assessed !== progress) await saveProgress(tx, assessed, now);
+      const pending = message.metadata?.[metaKey] as Record<string, string | null> | undefined;
+      await tx.saveMessage({ ...message, metadata: { ...message.metadata, [metaKey]: {
+        ...pending, [pointId]: verdict.final ? null : combined,
+      } } });
+      await this.appendEvent(tx, context, context.turn.turnId, "AssessmentCommitted", now, {
+        message_id: message.message_id, knowledge_point_id: pointId, result: verdict.result, final: verdict.final,
+        ...(verdict.final && { evidence_id: id }),
+      });
+    });
     return { ok: true, final: verdict.final, result: verdict.result,
       ...(verdict.final && { mastered: isMastered(assessed, kp), criteria_met: verdict.criteria_met }),
       feedback: verdict.feedback };
@@ -288,7 +401,7 @@ export class StudyInteractions {
 
   async skip(scope: Scope, id?: string) {
     const row = await this.requireCard(scope, id);
-    if (!exists(row)) throw new ChatTurnError("该题卡已结束");
+    if (!exists(row)) throw new StaleInteractionError();
     await this.store.abandonInteraction(row.interaction_id, this.now());
     return { ok: true, interaction_id: row.interaction_id };
   }
@@ -337,10 +450,16 @@ export class StudyInteractions {
       card = { ...row, question: question === row.question ? updated : { ...row.question,
         questions: row.question.questions.map((leaf) => leaf === question ? updated : leaf) } };
     }
-    if (next !== progress) await this.save(next);
     const updated: StoredInteraction = { ...card, updated_at: now, grade: { questions: grades },
       status: card.status === "abandoned" ? "abandoned" : ready(card, grades) ? "graded" : "awaiting_input" };
-    await this.store.updateInteraction(updated);
+    await this.store.runInTransaction(async (tx) => {
+      if (!sameSubmission(await tx.getInteraction(row.interaction_id), row)) throw new StaleInteractionError();
+      await saveProgress(tx, next, now);
+      await tx.updateInteraction(updated);
+      await this.appendEvent(tx, context, context.turn.turnId,
+        input.action === "void" ? "AssessmentVoided" : "AssessmentCorrected", now,
+        { interaction_id: row.interaction_id, submission_id: row.submission_id, question_id: question.question_id, reason });
+    });
     return { ok: true, action: input.action, question_id: question.question_id, status: updated.status };
   }
 }

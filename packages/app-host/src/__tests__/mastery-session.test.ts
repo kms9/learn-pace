@@ -185,13 +185,13 @@ it("commits a prepared rewrite and reorder; refuses a foreign, changed or expire
   expect(saved.modules[1]?.knowledge_points[0]?.id).toBe(a!.knowledge_points[0]!.id);
   const changed = await preview();
   await mastery.renameTopic(pathId, "新标题");
-  expect((await commit(changed)).metadata?.runtime).toMatchObject({ tools: [{ code: "rejected" }] });
+  expect((await commit(changed)).metadata?.runtime).toMatchObject({ tools: [{ code: "version_conflict" }] });
   const expired = await preview();
   advance(3600);
   expect((await commit(expired)).metadata?.runtime).toMatchObject({ tools: [{ code: "rejected" }] });
 });
 
-it("coordinates path locks across sessions and restores interrupted turns across Hosts", async () => {
+it("coordinates path locks across sessions and retries a cancelled turn", async () => {
   const { mastery, built, store, fetch, host, open } = harness();
   const { pathId, session } = await built();
   const other = await mastery.createSession(pathId, "study");
@@ -203,13 +203,8 @@ it("coordinates path locks across sessions and restores interrupted turns across
   await vi.waitFor(async () => expect((await store.listMessages(session.session_id)).at(-1)?.content).toBe("first"));
   mastery.stop(pathId, session.session_id);
   const partial = await sending;
-  await store.saveMessage({ ...partial, status: "generating" });
+  expect(partial).toMatchObject({ content: "first", status: "interrupted" });
   const reopened = open(host());
-  const previous = fetch.mock.calls.length;
-  await reopened.recoverInterruptedTurns();
-  expect((await reopened.openSession(pathId, session.session_id)).messages.at(-1))
-    .toMatchObject({ content: "first", status: "interrupted" });
-  expect(fetch).toHaveBeenCalledTimes(previous);
   expect(await reopened.retry(pathId, session.session_id, partial.message_id)).toMatchObject({ status: "committed" });
 });
 

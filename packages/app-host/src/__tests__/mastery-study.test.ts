@@ -43,7 +43,8 @@ async function harness() {
   };
   const read = async () => (await store.get(pathId))!;
   const request = (i: number) => JSON.parse(String(fetch.mock.calls[i]![1]?.body));
-  const submit = async (id: string, answers: Record<string, string>) => mastery.submitAnswer(pathId, session, id, answers);
+  const submit = async (id: string, answers: Record<string, string>) =>
+    mastery.submitAnswer(pathId, session, id, answers, `submission-${++serial}`);
   return { store, fetch, open, mastery, pathId, session, push, send, post, read, request, submit, advance: () => { now += 10; } };
 }
 
@@ -66,7 +67,6 @@ it("finishes after saving a private quiz, holds the current card, and restores i
 
   const restored = open().createMasterySessionService();
   const count = fetch.mock.calls.length;
-  await restored.recoverInterruptedTurns();
   expect((await restored.openSession(pathId, session)).cards).toEqual(original.cards);
   expect(fetch).toHaveBeenCalledTimes(count);
 });

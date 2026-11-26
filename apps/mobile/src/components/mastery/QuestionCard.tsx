@@ -1,6 +1,7 @@
 import type { Answers, StudyCard } from "@learn-pace/app-host";
 import type { PublicPendingQuestion } from "@learn-pace/domain";
 import type { QuestionGrade } from "@learn-pace/infra";
+import { randomUUID } from "expo-crypto";
 import { useEffect, useRef, useState, type ComponentRef } from "react";
 import { Pressable, StyleSheet, Text, TextInput, View } from "react-native";
 import { colors, radius, spacing } from "../../theme";
@@ -23,7 +24,7 @@ export function QuestionCard({ card, disabled, submitting, submit, retry, skip, 
   card: StudyCard;
   disabled: boolean;
   submitting: boolean;
-  submit: (answers: Answers) => void;
+  submit: (answers: Answers, submissionId: string) => void;
   retry: () => void;
   skip: () => void;
   challenge: () => void;
@@ -33,11 +34,15 @@ export function QuestionCard({ card, disabled, submitting, submit, retry, skip, 
   const [free, setFree] = useState<Record<string, boolean>>({});
   const [focused, setFocused] = useState<string>();
   const inputs = useRef(new Map<string, AnswerInput>());
+  const submission = useRef<{ content: string; id: string } | null>(null);
   const parts = card.question.questions?.length ? card.question.questions : [card.question];
   const group = card.question.question_type === "group";
   const draft = { ...card.answers, ...edits };
   const editable = card.status === "awaiting_input" && !disabled;
-  const complete = parts.every(({ question_id }) => card.grade?.questions[question_id]?.voided || draft[question_id]?.trim());
+  const complete = parts.every(({ question_id }) => {
+    const grade = card.grade?.questions[question_id];
+    return grade?.final || grade?.voided || draft[question_id]?.trim();
+  });
   const result = !group ? card.grade?.questions[card.question.question_id] : undefined;
   const border = result?.voided || !result?.final ? colors.border :
     result.result === "correct" ? colors.success : result.result === "incorrect" ? colors.danger : colors.primary;
@@ -53,8 +58,12 @@ export function QuestionCard({ card, disabled, submitting, submit, retry, skip, 
 
   function submitDraft() {
     if (!canSubmit) return;
-    submit(Object.fromEntries(parts.filter(({ question_id }) => !card.grade?.questions[question_id]?.final &&
-      !card.grade?.questions[question_id]?.voided).map(({ question_id }) => [question_id, draft[question_id] ?? ""])));
+    const active = parts.filter(({ question_id }) => !card.grade?.questions[question_id]?.voided);
+    const content = JSON.stringify(active.map(({ question_id }) => [question_id, draft[question_id]]));
+    if (submission.current?.content !== content) submission.current = { content, id: randomUUID() };
+    const answers = Object.fromEntries(active.filter(({ question_id }) => !card.grade?.questions[question_id]?.final)
+      .map(({ question_id }) => [question_id, draft[question_id] ?? ""]));
+    submit(answers, submission.current.id);
   }
   const latestSubmit = useRef(submitDraft);
   latestSubmit.current = submitDraft;
@@ -75,6 +84,7 @@ export function QuestionCard({ card, disabled, submitting, submit, retry, skip, 
   }, [canSubmit, card.interaction_id, editable, focused, nextInput, onAnswerControls, submitLabel]);
 
   function change(id: string, answer: string) {
+    if (draft[id] !== answer) submission.current = null;
     setEdits((current) => ({ ...current, [id]: answer }));
   }
 
@@ -97,7 +107,7 @@ export function QuestionCard({ card, disabled, submitting, submit, retry, skip, 
             setFree((current) => ({ ...current, [id]: !asText }));
             change(id, "");
           }} />
-        {part && card.status !== "answered" && <Grade grade={part} />}
+        {part && (card.status !== "answered" || part.final || part.voided) && <Grade grade={part} />}
       </View>;
     })}
     {card.status === "awaiting_input" && <View style={local.actions}>

@@ -4,17 +4,60 @@ interface MigrationDatabase {
   getAllAsync<T>(sql: string): Promise<T[]>;
 }
 
-const schemaVersion = 4;
+export const databaseSchemaVersion = 5;
 
 export async function migrateLearningDatabase(db: MigrationDatabase): Promise<void> {
   await db.execAsync("PRAGMA journal_mode = WAL");
   const version = (await db.getFirstAsync<{ user_version: number }>("PRAGMA user_version"))?.user_version ?? 0;
-  if (version > schemaVersion) throw new Error("数据库版本高于当前应用支持的版本");
-  if (version === schemaVersion) return;
+  if (version > databaseSchemaVersion) throw new Error("数据库版本高于当前应用支持的版本");
+  if (version === databaseSchemaVersion) return;
 
   if (version < 2) await migrateV2(db);
   if (version < 3) await migrateV3(db);
-  await migrateV4(db);
+  if (version < 4) await migrateV4(db);
+  await migrateV5(db);
+}
+
+async function migrateV5(db: MigrationDatabase): Promise<void> {
+  await db.execAsync("BEGIN IMMEDIATE");
+  try {
+    const columns = await db.getAllAsync<{ name: string }>("PRAGMA table_info(learning_progress)");
+    if (!columns.some(({ name }) => name === "version")) {
+      await db.execAsync("ALTER TABLE learning_progress ADD COLUMN version INTEGER NOT NULL DEFAULT 0");
+    }
+    await db.execAsync(`
+      UPDATE learning_progress
+      SET version = CAST(COALESCE(json_extract(progress, '$.version'), 0) AS INTEGER)
+      WHERE json_valid(progress);
+
+      WITH ranked_submissions AS (
+        SELECT interaction_id, ROW_NUMBER() OVER (
+          PARTITION BY submission_id ORDER BY updated_at DESC, interaction_id DESC
+        ) AS rank
+        FROM interactions WHERE submission_id IS NOT NULL
+      )
+      UPDATE interactions SET submission_id = NULL
+      WHERE interaction_id IN (SELECT interaction_id FROM ranked_submissions WHERE rank > 1);
+
+      CREATE UNIQUE INDEX IF NOT EXISTS interactions_submission_unique
+        ON interactions (submission_id) WHERE submission_id IS NOT NULL;
+      CREATE TABLE IF NOT EXISTS domain_events (
+        event_id TEXT PRIMARY KEY NOT NULL,
+        path_id TEXT NOT NULL,
+        session_id TEXT,
+        turn_id TEXT,
+        event_type TEXT NOT NULL,
+        payload TEXT NOT NULL,
+        created_at REAL NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS domain_events_by_path ON domain_events (path_id, created_at DESC, event_id);
+      PRAGMA user_version = 5;
+    `);
+    await db.execAsync("COMMIT");
+  } catch (error) {
+    await db.execAsync("ROLLBACK").catch(() => {});
+    throw error;
+  }
 }
 
 async function migrateV3(db: MigrationDatabase): Promise<void> {
@@ -49,7 +92,7 @@ async function migrateV4(db: MigrationDatabase): Promise<void> {
     CREATE INDEX IF NOT EXISTS interactions_by_path ON interactions (path_id, updated_at);
     CREATE INDEX IF NOT EXISTS interactions_open_by_update ON interactions (updated_at DESC, interaction_id)
       WHERE status IN ('awaiting_input', 'answered');
-    PRAGMA user_version = ${schemaVersion};
+    PRAGMA user_version = 4;
   `);
 }
 

@@ -4,16 +4,18 @@ import {
   setLearnerMasteryOverride, stateDigest, validateDesiredRetention,
   type LearningProgress, type SessionMode, type TopicSource,
 } from "@learn-pace/domain";
-import type { AppStore, Clock, StoredSession } from "@learn-pace/infra";
+import type { AppStore, Clock, StoredInteraction, StoredMessage, StoredSession } from "@learn-pace/infra";
 import { PiDurableRuntime, type ModelConfig } from "@learn-pace/runtime";
 import { ChatTurnError, ChatTurns, limitText, type MessageObserver, type PrepareTurn } from "../chat-turns.js";
 import { readLearningRecords } from "../learning-home.js";
+import { restoreGateFor } from "../restore-gate.js";
 import { masteryInstructions, masteryOpeningMessage, reviewOpeningMessage } from "./prompts.js";
 import type { MasteryHandoff } from "./nav-tools.js";
+import { saveProgress } from "./persistence.js";
 import { reviewPlan } from "./review.js";
 import { masteryStatus } from "./status.js";
 import { registerMasteryTools, ToolRefusal, type OutlinePreview } from "./tools/index.js";
-import { displayStudyAnswer, projectStudyCard, questionLeaves, savedAnswers, StudyInteractions, type Answers } from "./study.js";
+import { displayStudyAnswer, projectStudyCard, savedAnswers, StaleInteractionError, StudyInteractions, type Answers, type StudyCard } from "./study.js";
 
 const blocked = "同一精通目标的另一会话正在进行，请等它结束再发送";
 const emptyOutline = "还没有可以学习的大纲。请留在「编辑大纲」模式，先和导师定下大纲。";
@@ -33,10 +35,13 @@ export function masteryToolStatusLabel(toolName: string): string {
 }
 
 type ActivityObserver = (toolName: string | null) => void;
+type OutlineCommit = { sessionId: string; turnId: string };
 
 export type TopicMaterial =
   | { kind: "chat"; sessionId: string; messageId?: string; excerpt?: string }
   | { kind: "text_note"; label?: string; text: string };
+
+export type SubmitAnswerResult = { kind: "turn"; message: StoredMessage } | { kind: "receipt"; card: StudyCard };
 
 export class MasterySessionService {
   private readonly turns: ChatTurns;
@@ -48,30 +53,32 @@ export class MasterySessionService {
   private readonly activity = new Map<string, string>();
 
   constructor(private readonly store: AppStore, private readonly clock: Clock, private readonly makeId: () => string,
-    getModelConfig: () => Promise<ModelConfig | null>, private readonly fetch?: typeof globalThis.fetch) {
-    this.turns = new ChatTurns(store, clock, makeId, getModelConfig);
+    getModelConfig: () => Promise<ModelConfig | null>, private readonly fetch?: typeof globalThis.fetch,
+    private readonly restoreGate = restoreGateFor(store)) {
+    this.turns = new ChatTurns(store, clock, makeId, getModelConfig, restoreGate);
     this.study = new StudyInteractions(store, () => this.clock.nowSeconds(), makeId,
       (id) => this.requirePath(id), (progress) => this.persist(progress), fetch);
   }
 
   async createTopic(input: { goal: string; emoji?: string; materials?: readonly TopicMaterial[] }) {
-    const goal = input.goal.trim();
-    if (!goal || [...goal].length > 2000) throw new ChatTurnError("请输入 1–2,000 个字符的学习目标");
-    const now = this.clock.nowSeconds();
-    const id = this.makeId();
-    const goalSource: TopicSource = { id: this.makeId(), kind: "goal", label: "学习目标", excerpt: goal, created_at: now };
-    const materials = await Promise.all((input.materials ?? []).map((item) => this.resolveSource(item, now)));
-    const progress = createLearningProgress({
-      book_id: id, goal, name: limitText(goal.replace(/\s+/g, " "), 48), emoji: input.emoji?.trim() || "🧭",
-      topic_sources: [goalSource, ...materials], created_at: now, updated_at: now,
+    return this.restoreGate.write(async () => {
+      const goal = input.goal.trim();
+      if (!goal || [...goal].length > 2000) throw new ChatTurnError("请输入 1–2,000 个字符的学习目标");
+      const now = this.clock.nowSeconds();
+      const id = this.makeId();
+      const goalSource: TopicSource = { id: this.makeId(), kind: "goal", label: "学习目标", excerpt: goal, created_at: now };
+      const materials = await Promise.all((input.materials ?? []).map((item) => this.resolveSource(item, now)));
+      const progress = createLearningProgress({
+        book_id: id, goal, name: limitText(goal.replace(/\s+/g, " "), 48), emoji: input.emoji?.trim() || "🧭",
+        topic_sources: [goalSource, ...materials], created_at: now, updated_at: now,
+      });
+      const session = await this.withPath(id, "", () => this.store.runInTransaction(async (tx) => {
+        await tx.saveWithCas(progress, null, derivePathStatus(progress));
+        return this.insertSession(progress, "outline", this.makeId(), tx);
+      }));
+      const opening = this.sendOpening(session, masteryOpeningMessage);
+      return { pathId: id, session, opening };
     });
-    await this.store.save(progress, derivePathStatus(progress));
-    const session = await this.createSession(id, "outline");
-    const opening = this.turns.configured().then((configured) =>
-      configured ? this.send(id, session.session_id, masteryOpeningMessage) : null);
-    // 向导进入会话时，消息可继续在后台流式生成。
-    void opening.catch(() => {});
-    return { pathId: id, session, opening };
   }
 
   async listTopics() {
@@ -137,23 +144,27 @@ export class MasterySessionService {
   async resetTopic(pathId: string) {
     return this.withPath(pathId, "", async () => {
       const now = this.clock.nowSeconds();
-      const progress = resetProgress(await this.requirePath(pathId), now);
-      let open = await this.store.getOpenInteraction(pathId);
-      while (open) {
-        await this.store.abandonInteraction(open.interaction_id, now);
-        open = await this.store.getOpenInteraction(pathId);
-      }
-      await this.store.save(progress, derivePathStatus(progress));
+      const progress = await this.requirePath(pathId);
+      const reset = resetProgress(progress, now);
+      await this.store.runInTransaction(async (tx) => {
+        await tx.saveWithCas(reset, progress.version, derivePathStatus(reset));
+        for (const card of await tx.listOpenInteractionsByPath(pathId)) {
+          await tx.abandonInteraction(card.interaction_id, now);
+        }
+      });
       this.clearPreviews(pathId);
     });
   }
 
   async deleteTopic(pathId: string) {
     return this.withPath(pathId, "", async () => {
-      await this.requirePath(pathId);
-      await this.store.deleteInteractionsByPath(pathId);
-      await this.store.deleteSessionsByPath(pathId, "mastery");
-      await this.store.delete(pathId);
+      await this.store.runInTransaction(async (tx) => {
+        await this.requirePath(pathId, tx);
+        await tx.deleteInteractionsByPath(pathId);
+        await tx.deleteSessionsByPath(pathId, "mastery");
+        await tx.delete(pathId);
+        await tx.deleteDomainEventsByPath(pathId);
+      });
       this.clearPreviews(pathId);
     });
   }
@@ -200,27 +211,36 @@ export class MasterySessionService {
   }
 
   async startReview(pathId: string, objectiveId?: string) {
-    const { session, message } = await this.withPath(pathId, "", async () => {
-      const progress = await this.requirePath(pathId);
-      const objective = objectiveId ? findKnowledgePoint(progress, objectiveId).kp : undefined;
-      if (objectiveId && (!objective || !isMastered(progress, objective))) {
-        throw new ChatTurnError("复习只考已经掌握的知识点");
-      }
-      const titles = objective ? [objective.name] : reviewPlan(progress, this.clock.nowSeconds()).due.map(({ knowledge_point_name }) => knowledge_point_name);
-      return { session: await this.insertSession(progress, "review"), message: reviewOpeningMessage(titles) };
+    return this.restoreGate.write(async () => {
+      const { session, message } = await this.withPath(pathId, "", async () => {
+        const progress = await this.requirePath(pathId);
+        const objective = objectiveId ? findKnowledgePoint(progress, objectiveId).kp : undefined;
+        if (objectiveId && (!objective || !isMastered(progress, objective))) {
+          throw new ChatTurnError("复习只考已经掌握的知识点");
+        }
+        const titles = objective ? [objective.name] : reviewPlan(progress, this.clock.nowSeconds()).due.map(({ knowledge_point_name }) => knowledge_point_name);
+        return { session: await this.insertSession(progress, "review"), message: reviewOpeningMessage(titles) };
+      });
+      const opening = this.sendOpening(session, message);
+      return { session, opening };
     });
-    const opening = this.turns.configured().then((configured) => configured ? this.send(pathId, session.session_id, message) : null);
-    void opening.catch(() => {});
-    return { session, opening };
   }
 
-  private async insertSession(progress: LearningProgress, mode: SessionMode, sessionId = this.makeId()) {
+  private sendOpening(session: StoredSession, message: string) {
+    const opening = this.restoreGate.write(async () => await this.turns.configured()
+      ? this.send(session.path_id!, session.session_id, message) : null);
+    // 进入会话时，开场消息可继续在后台生成。
+    void opening.catch(() => {});
+    return opening;
+  }
+
+  private async insertSession(progress: LearningProgress, mode: SessionMode, sessionId = this.makeId(), store = this.store) {
     const now = this.clock.nowSeconds();
     const session: StoredSession = {
       session_id: sessionId, kind: "mastery", path_id: progress.book_id, mode,
       title: pathDisplayName(progress), model_id: null, created_at: now, updated_at: now,
     };
-    await this.store.saveSession(session);
+    await store.saveSession(session);
     return session;
   }
 
@@ -243,13 +263,6 @@ export class MasterySessionService {
         throw error;
       }
     });
-  }
-
-  async recoverInterruptedTurns() {
-    for (const session of await this.store.listSessions()) {
-      if (session.kind !== "mastery" || !session.path_id || this.turns.running(session.path_id) !== undefined) continue;
-      await this.withPath(session.path_id, session.session_id, () => this.turns.recover(session));
-    }
   }
 
   runningSession(pathId: string) { return this.turns.running(pathId); }
@@ -309,19 +322,13 @@ export class MasterySessionService {
       this.turns.repeat(await this.requireSession(pathId, sessionId), replyId, "retry", this.prepare, signal, onMessage));
   }
 
-  async submitAnswer(pathId: string, sessionId: string, interactionId: string, answers: Answers) {
+  async submitAnswer(pathId: string, sessionId: string, interactionId: string, answers: Answers,
+    submissionId: string): Promise<SubmitAnswerResult> {
     return this.withPath(pathId, sessionId, async (signal) => {
       const session = await this.practiceSession(pathId, sessionId);
-      const row = await this.study.requireCard({ pathId, sessionId }, interactionId);
-      const merged = { ...savedAnswers(row), ...answers };
-      if (questionLeaves(row.question).some(({ question_id }) =>
-        !row.grade?.questions[question_id]?.voided && !merged[question_id]?.trim())) {
-        throw new ChatTurnError("请完成所有未批改的小题后再提交");
-      }
-      const staged = await this.study.stage(row, answers);
-      return this.turns.send(session, displayStudyAnswer(staged), [], this.prepare, signal, undefined, {
-        mastery_answer: { interaction_id: interactionId, submission_id: staged.submission_id, answers: savedAnswers(staged) },
-      });
+      const submitted = await this.study.submit({ pathId, sessionId }, interactionId, answers, submissionId);
+      if (submitted.kind === "receipt") return submitted;
+      return { kind: "turn", message: await this.sendAnswer(session, submitted.row, signal) };
     });
   }
 
@@ -329,10 +336,16 @@ export class MasterySessionService {
     return this.withPath(pathId, sessionId, async (signal) => {
       const session = await this.practiceSession(pathId, sessionId);
       const row = await this.study.requireCard({ pathId, sessionId }, interactionId);
-      if (row.status !== "answered" || !row.raw_answer || !row.submission_id) throw new ChatTurnError("该题当前无需重试批改");
-      return this.turns.send(session, displayStudyAnswer(row), [], this.prepare, signal, undefined, {
-        mastery_answer: { interaction_id: interactionId, submission_id: row.submission_id, answers: savedAnswers(row) },
-      });
+      if (row.status !== "answered" || !row.raw_answer) {
+        throw new StaleInteractionError("该题当前无需重试批改，请查看最新题卡。");
+      }
+      return this.sendAnswer(session, row, signal);
+    });
+  }
+
+  private sendAnswer(session: StoredSession, row: StoredInteraction, signal: AbortSignal) {
+    return this.turns.send(session, displayStudyAnswer(row), [], this.prepare, signal, undefined, {
+      mastery_answer: { interaction_id: row.interaction_id, submission_id: row.submission_id, answers: savedAnswers(row) },
     });
   }
 
@@ -411,8 +424,8 @@ export class MasterySessionService {
     return session;
   }
 
-  private async requirePath(pathId: string) {
-    const progress = await this.store.get(pathId);
+  private async requirePath(pathId: string, store = this.store) {
+    const progress = await store.get(pathId);
     if (!progress) throw new ChatTurnError("找不到该精通目标");
     return progress;
   }
@@ -442,18 +455,24 @@ export class MasterySessionService {
     }
   }
 
-  private async persist(progress: LearningProgress, outline = false) {
+  private async persist(progress: LearningProgress, outline?: OutlineCommit) {
     const now = this.clock.nowSeconds();
-    if (outline) {
-      const current = await this.store.getOpenInteraction(progress.book_id);
+    await this.store.runInTransaction(async (tx) => {
+      await saveProgress(tx, progress, now);
+      if (!outline) return;
       const locations = new Map(progress.modules.flatMap((module) => module.knowledge_points)
         .map(({ id, module_id }) => [id, module_id]));
-      if (current && !rebindOutlineQuestion(current.question, locations)) {
-        await this.store.abandonInteraction(current.interaction_id, now);
+      const abandoned = [];
+      for (const card of await tx.listOpenInteractionsByPath(progress.book_id)) {
+        if (!rebindOutlineQuestion(card.question, locations)) {
+          await tx.abandonInteraction(card.interaction_id, now);
+          abandoned.push(card.interaction_id);
+        }
       }
-    }
-    const next = { ...progress, version: progress.version + 1, updated_at: now };
-    await this.store.save(next, derivePathStatus(next));
+      await tx.appendDomainEvent({ event_id: this.makeId(), path_id: progress.book_id,
+        session_id: outline.sessionId, turn_id: outline.turnId, event_type: "OutlineCommitted", created_at: now,
+        payload: { version: progress.version + 1, abandoned_interaction_ids: abandoned } });
+    });
   }
 
   private clearPreviews(pathId: string) {
@@ -504,7 +523,8 @@ export class MasterySessionService {
         await this.persistMode(await this.requireSession(pathId, session.session_id), next);
         mode = next;
       },
-      read: () => this.requirePath(pathId), save: (progress, outline) => this.persist(progress, outline),
+      read: () => this.requirePath(pathId), save: (progress, outline) => this.persist(progress,
+        outline ? { sessionId: session.session_id, turnId: turn.turnId } : undefined),
       now: () => this.clock.nowSeconds(), makeId: this.makeId, previews: this.previews,
       study: { cards: this.study, scope },
     });

@@ -4,14 +4,15 @@ import { loadModelConfigFromEnv, PiDurableRuntime, type ModelConfig } from "@lea
 import { StudyWorkbench } from "./study-workbench.js";
 import { Lf01ChatService } from "./lf01-chat.js";
 import { MasterySessionService } from "./mastery/session-service.js";
-
-const modelSetting = "deepseek-model-config";
-const legacyKey = "deepseek-api-key";
-
-export type PublicModelSettings = Omit<ModelConfig, "apiKey">;
-type StoredModelSettings = PublicModelSettings & { credentialRef: string };
-type ModelSettingsInput = Pick<ModelConfig, "baseUrl"> &
-  Partial<Pick<ModelConfig, "model" | "reasoning" | "apiKey" | "contextWindow" | "maxTokens">>;
+import { RecoveryService } from "./recovery.js";
+import {
+  decodeModelRecord, decodeRetiredRefs, legacyKey, ModelSettingsError, modelSetting, parseSettings,
+  publicModelSettings, retiredCredentialSetting, type ModelSettingsInput, type PublicModelSettings,
+} from "./model-settings.js";
+import { restoreGateFor, type RestoreGate } from "./restore-gate.js";
+import { BackupRestoreService } from "./backup-restore.js";
+import type { BackupDigest } from "./backup-format.js";
+export { ModelSettingsError, type PublicModelSettings } from "./model-settings.js";
 
 export interface BootstrapSnapshot {
   model: { settings: PublicModelSettings | null; configured: boolean };
@@ -23,24 +24,6 @@ export interface BootstrapSnapshot {
 type ProbeResult = { ok: true; elapsedMs: number } | { ok: false; message: string };
 type BootstrapTransport = { makeId: () => string; fetch?: typeof globalThis.fetch };
 
-export class ModelSettingsError extends Error {}
-
-function parseSettings(input: ModelSettingsInput): PublicModelSettings {
-  try {
-    const { apiKey: _unused, ...settings } = loadModelConfigFromEnv({
-      PI_OPENAI_BASE_URL: input.baseUrl,
-      PI_MODEL: input.model,
-      PI_REASONING: input.reasoning ?? "high",
-      PI_CONTEXT_WINDOW: input.contextWindow?.toString(),
-      PI_MAX_TOKENS: input.maxTokens?.toString(),
-      OPENAI_API_KEY: "validation-placeholder",
-    });
-    return settings;
-  } catch {
-    throw new ModelSettingsError("请检查网关地址和模型参数");
-  }
-}
-
 function probeFailure(runtimeError: string | undefined): string {
   const status = /^DeepSeek request failed \(HTTP ([45]\d{2})\)$/.exec(runtimeError ?? "")?.[1];
   if (status === "401" || status === "403") return `网关拒绝认证（HTTP ${status}），请检查 Key 和模型权限`;
@@ -50,11 +33,20 @@ function probeFailure(runtimeError: string | undefined): string {
 
 export class AppBootstrapService {
   private mastery?: MasterySessionService;
+  private readonly restoreGate: RestoreGate;
   constructor(
     private readonly store: AppStore,
     private readonly secrets: SecretStore,
     private readonly transport: BootstrapTransport,
-  ) {}
+  ) { this.restoreGate = restoreGateFor(store); }
+
+  recoverOnStartup(clock = systemClock) {
+    return this.restoreGate.write(() => new RecoveryService(this.store, clock, this.transport.makeId).reconcileAll());
+  }
+
+  createBackupRestoreService(appVersion: string, sha256: BackupDigest, clock = systemClock): BackupRestoreService {
+    return new BackupRestoreService(this.store, this.secrets, { appVersion, sha256, clock, makeId: this.transport.makeId });
+  }
 
   async snapshot(): Promise<BootstrapSnapshot> {
     const [model, paths, sessions, pending] = await Promise.all([
@@ -83,34 +75,22 @@ export class AppBootstrapService {
     return messages.map(({ message_id, role, content, status }) => ({ message_id, role, content, status }));
   }
 
-  private async readModelRecord(): Promise<StoredModelSettings | null> {
-    const raw = await this.store.readSetting(modelSetting);
-    if (!raw) return null;
-    try {
-      const input = JSON.parse(raw) as StoredModelSettings;
-      const credentialRef = input.credentialRef ?? legacyKey;
-      if (typeof credentialRef !== "string" ||
-          !/^deepseek-api-key(?:\.[\w-]+)?$/.test(credentialRef)) return null;
-      return { ...parseSettings(input), credentialRef };
-    } catch {
-      return null;
-    }
+  private async readModelRecord() {
+    return decodeModelRecord(await this.store.readSetting(modelSetting));
   }
 
   private async modelSettings(): Promise<BootstrapSnapshot["model"]> {
     const record = await this.readModelRecord();
     if (!record) return { settings: null, configured: false };
-    const { credentialRef, ...settings } = record;
-    const key = await this.secrets.getItem(credentialRef).catch(() => null);
-    return { settings, configured: Boolean(key?.trim()) };
+    const key = record.credentialRef && await this.secrets.getItem(record.credentialRef).catch(() => null);
+    return { settings: publicModelSettings(record), configured: Boolean(key?.trim()) };
   }
 
   private async getModelConfig(): Promise<ModelConfig | null> {
     const record = await this.readModelRecord();
-    if (!record) return null;
-    const { credentialRef, ...settings } = record;
-    const apiKey = (await this.secrets.getItem(credentialRef))?.trim();
-    return apiKey ? { ...settings, apiKey } : null;
+    if (!record?.credentialRef) return null;
+    const apiKey = (await this.secrets.getItem(record.credentialRef))?.trim();
+    return apiKey ? { ...publicModelSettings(record), apiKey } : null;
   }
 
   createLf01ChatService(clock = systemClock): Lf01ChatService {
@@ -124,29 +104,44 @@ export class AppBootstrapService {
   }
 
   async saveModelSettings(input: ModelSettingsInput): Promise<void> {
+    return this.restoreGate.write(() => this.saveCredentials(input));
+  }
+
+  private async saveCredentials(input: ModelSettingsInput): Promise<void> {
     const current = await this.readModelRecord();
     const settings = parseSettings({ ...current, ...input });
     const provided = input.apiKey?.trim();
 
     if (!provided) {
-      if (!current || new URL(current.baseUrl).origin !== new URL(settings.baseUrl).origin ||
+      if (!current?.credentialRef || new URL(current.baseUrl).origin !== new URL(settings.baseUrl).origin ||
           !(await this.secrets.getItem(current.credentialRef))?.trim()) {
         throw new ModelSettingsError("请输入目标网关的 API Key");
       }
-      await this.store.writeSetting(modelSetting, JSON.stringify({ ...settings, credentialRef: current.credentialRef }));
+      await this.store.writeSetting(modelSetting, JSON.stringify({ ...settings, credentialRef: current.credentialRef,
+        retiredCredentialRefs: current.retiredCredentialRefs }));
       return;
     }
 
+    const detached = decodeRetiredRefs(await this.store.readSetting(retiredCredentialSetting));
     // 配置指向独立凭据，避免顺序写入中途故障时将新 Key 配给旧网关。
     const credentialRef = `${legacyKey}.${this.transport.makeId()}`;
+    const saved = JSON.stringify({ ...settings, credentialRef });
     await this.secrets.setItem(credentialRef, provided);
     try {
-      await this.store.writeSetting(modelSetting, JSON.stringify({ ...settings, credentialRef }));
+      if (detached.length) {
+        await this.store.runInTransaction(async (tx) => {
+          await tx.writeSetting(modelSetting, saved);
+          await tx.writeSetting(retiredCredentialSetting, "[]");
+        });
+      } else {
+        await this.store.writeSetting(modelSetting, saved);
+      }
     } catch (error) {
       await this.secrets.deleteItem(credentialRef).catch(() => {});
       throw error;
     }
-    if (current) await this.secrets.deleteItem(current.credentialRef).catch(() => {});
+    const retired = new Set([...detached, ...(current?.retiredCredentialRefs ?? []), current?.credentialRef]);
+    for (const ref of retired) if (ref && ref !== credentialRef) await this.secrets.deleteItem(ref).catch(() => {});
   }
 
   async saveImportedModelSettings(env: Record<string, string | undefined>): Promise<void> {
@@ -155,6 +150,10 @@ export class AppBootstrapService {
   }
 
   async testModelConnection(): Promise<ProbeResult> {
+    return this.restoreGate.write(() => this.probeModel());
+  }
+
+  private async probeModel(): Promise<ProbeResult> {
     try {
       const config = await this.getModelConfig();
       if (!config) return { ok: false, message: "请先保存 DeepSeek Flash 配置" };

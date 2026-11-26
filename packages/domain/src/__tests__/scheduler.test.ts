@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { createLearningEvidence, createLearningProgress } from "../models.js";
+import { createKnowledgePoint, createLearningEvidence, createLearningModule, createLearningProgress } from "../models.js";
+import { objectiveReport } from "../policy.js";
 import { bindBuiltinReviewStrategy } from "../review-strategy.js";
 import {
   INTERVAL_SEQUENCES,
@@ -92,6 +93,47 @@ describe("SpacedRepetitionScheduler (DeepTutor scheduler.py parity)", () => {
     expect(state.lapse_count).toBe(1);
     expect(state.scheduled_after_failure).toBe(true);
     expect(state.stability).toBeLessThan(s2);
+  });
+
+  it("projects zero risk before the last review without moving stored timestamps", () => {
+    const day = 86_400;
+    const state = scheduler.getInitialState("procedure", { now: T0 });
+    scheduler.scheduleNext(state, "procedure", true, T0);
+    state.next_review_at = T0 + 3 * day;
+    state.lapse_count = 1;
+    const point = createKnowledgePoint({ id: "kp", name: "约分", module_id: "mod", type: "procedure" });
+    const module = createLearningModule({ id: "mod", name: "分数", order: 0, knowledge_points: [point] });
+    const progress = createLearningProgress({ book_id: "path", modules: [module],
+      knowledge_types: { kp: "procedure" }, repetition_states: { kp: state } });
+    progress.review_queue = scheduler.buildReviewQueue(progress, T0);
+    const before = structuredClone(progress);
+    const backwards = T0 - 2 * day;
+    expect(scheduler.retrievability(state, backwards)).toBe(1);
+    expect(scheduler.forgettingRisk(state, progress, "kp", backwards)).toBe(0);
+    expect(progress.review_queue[0]?.forgetting_risk).toBeGreaterThan(0);
+    expect(objectiveReport(progress, "kp", backwards)?.review?.forgetting_risk).toBe(0);
+    expect(scheduler.getDueTasks(progress, 5, backwards)).toEqual([]);
+    expect(scheduler.getDueTasks(progress, 5, T0 + 4 * day)).toMatchObject([{ due_at: T0 + 3 * day }]);
+    expect(progress).toEqual(before);
+  });
+
+  it("keeps the review anchor after backward time and distinguishes a same-session success from a lapse", () => {
+    const state = scheduler.getInitialState("procedure", { now: T0 });
+    scheduler.scheduleNext(state, "procedure", true, T0);
+    const before = { ...state };
+    const backwards = T0 - 2 * 86_400;
+    scheduler.scheduleNext(state, "procedure", true, backwards);
+    expect(state).toMatchObject({ last_review_at: T0, last_scheduled_at: T0, review_count: before.review_count + 1,
+      stability: before.stability, next_review_at: before.next_review_at, lapse_count: before.lapse_count });
+
+    scheduler.scheduleNext(state, "procedure", false, backwards);
+    expect(state).toMatchObject({ last_review_at: T0, last_scheduled_at: T0, review_count: before.review_count + 2,
+      lapse_count: before.lapse_count + 1, scheduled_after_failure: true });
+    expect(state.stability).toBeGreaterThan(0);
+    expect(state.stability).toBeLessThan(before.stability);
+    expect(state.next_review_at).toBeGreaterThan(T0);
+    expect(state.next_review_at).toBeLessThan(before.next_review_at);
+    expect(Object.values(state).filter((value) => typeof value === "number").every(Number.isFinite)).toBe(true);
   });
 
   it("replays evidence deterministically and builds sorted review queue", () => {
