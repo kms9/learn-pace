@@ -1,8 +1,11 @@
-import { Lf01ChatError, RestoreGateError, messageQuotes, renderedChatSelections, type ChatQuote, type ChatSelection } from "@learn-pace/app-host";
+import {
+  KnowledgeCardError, Lf01ChatError, RestoreGateError, messageQuotes, publicQuickCheck, quickCheckExcerpt, renderedChatSelections,
+  type ChatQuote, type ChatSelection,
+} from "@learn-pace/app-host";
 import type { StoredMessage } from "@learn-pace/infra";
 import * as Clipboard from "expo-clipboard";
 import { useRouter } from "expo-router";
-import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState, type ComponentRef, type ReactNode } from "react";
 import {
   Alert, Keyboard, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View,
 } from "react-native";
@@ -10,8 +13,10 @@ import { useApp } from "../context/AppContext";
 import { colors, radius, spacing } from "../theme";
 import { ChatAction, ChatSheet, ConversationComposer, ScrollToBottomButton, useConversationScroll } from "./chat-controls";
 import { MessageContent } from "./MessageContent";
+import { QuickCheckCard } from "./QuickCheckCard";
 
-type SelectionAction = "quote" | "dito" | "goal";
+type SelectionAction = "quote" | "dito" | "goal" | "save";
+type ChatOperation = "turn" | "delete" | "quick-check";
 type SourceSelection = { message: StoredMessage; candidates?: ChatSelection[] };
 type RenderedSelection = { message: StoredMessage; text: string };
 const starterPrompts = [
@@ -31,18 +36,19 @@ type Properties = {
 };
 
 function feedback(error: unknown): string {
-  return error instanceof Lf01ChatError || error instanceof RestoreGateError ? error.message : "无法完成操作，请重试";
+  return error instanceof Lf01ChatError || error instanceof KnowledgeCardError || error instanceof RestoreGateError
+    ? error.message : "无法完成操作，请重试";
 }
 
 export function ChatConversation({
   sessionId, initialMessages, startSession, onFirstMessage, onThreadsChanged, renderThreadMarker, renderReplyExtra, intro,
 }: Properties) {
-  const { chat, snapshot } = useApp();
+  const { chat, knowledgeCards, snapshot } = useApp();
   const router = useRouter();
   const [messages, setMessages] = useState(initialMessages);
   const [draft, setDraft] = useState("");
   const [quotes, setQuotes] = useState<ChatQuote[]>([]);
-  const [busy, setBusy] = useState<"turn" | "delete" | null>(null);
+  const [busy, setBusy] = useState<ChatOperation | null>(null);
   const busyRef = useRef(false);
   const targetId = useRef(sessionId);
   const stopRequested = useRef(false);
@@ -53,10 +59,15 @@ export function ChatConversation({
   const [copiedId, setCopiedId] = useState<string>();
   const copyTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const copyRequest = useRef(0);
+  const composerInput = useRef<ComponentRef<typeof TextInput>>(null);
   const configured = snapshot.model.configured;
   const model = configured ? snapshot.model.settings?.model.replace(/^openai\//, "") : undefined;
   const generating = busy === "turn" || (chat.isRunning(sessionId ?? "") && messages.some(({ status }) => status === "generating"));
-  const latest = messages.filter(({ role, status }) => role === "assistant" && status === "committed").at(-1)?.message_id;
+  const latest = messages.filter(({ role, status, metadata }) =>
+    role === "assistant" && status === "committed" && metadata?.quick_check === undefined).at(-1)?.message_id;
+  const hasCompletedReply = messages.some(({ role, status, content, metadata }) => role === "assistant" &&
+    status === "committed" && content.trim() && typeof metadata?.source_user_message_id === "string");
+  const canStartCheck = !!sessionId && hasCompletedReply && !busy && !generating && configured;
 
   useEffect(() => () => { copyRequest.current++; clearTimeout(copyTimer.current); }, []);
 
@@ -97,7 +108,7 @@ export function ChatConversation({
     return () => { mounted = false; unsubscribe(); };
   }, [applyMessage, chat, sessionId]);
 
-  async function run(action: "turn" | "delete", operation: () => Promise<void>) {
+  async function run(action: ChatOperation, operation: () => Promise<void>) {
     if (busyRef.current) return;
     busyRef.current = true;
     stopRequested.current = false;
@@ -148,6 +159,29 @@ export function ChatConversation({
     });
   }
 
+  function createQuickCheck(sourceMessageId?: string) {
+    if (!sessionId || !canStartCheck) return;
+    void run("quick-check", async () => {
+      Keyboard.dismiss();
+      follow.current = true;
+      applyMessage(await chat.createQuickCheck(sessionId, sourceMessageId));
+    });
+  }
+
+  function continueAfterQuickCheck(message: StoredMessage) {
+    const excerpt = quickCheckExcerpt(message);
+    if (!excerpt) return;
+    const prompt = `我想继续聊刚才的自测。请帮我梳理这些题目涉及的概念。\n${excerpt}`;
+    setDraft((current) => current.trim() ? `${current}\n\n${prompt}` : prompt);
+    scrollToBottom();
+    composerInput.current?.focus();
+  }
+
+  async function quickCheckLearningGoal(session: string, message: StoredMessage) {
+    const params = await chat.learningGoalSource(session, message.message_id);
+    router.push({ pathname: "/mastery/new", params: { ...params } });
+  }
+
   function deleteTurn(messageId: string) {
     if (!sessionId) return;
     Alert.alert("删除这轮对话？", "这轮提问和回复将被删除。", [
@@ -179,6 +213,13 @@ export function ChatConversation({
       setSelected(null);
       onThreadsChanged?.();
       router.push({ pathname: "/chat/thread/[threadId]", params: { threadId: thread.thread_id } });
+      return;
+    }
+    if (action === "save") {
+      await knowledgeCards.saveSelection(sessionId, message.message_id, selection);
+      setSelected(null);
+      setRenderedSelection(null);
+      Alert.alert("已收藏为知识卡");
       return;
     }
     const params = await chat.learningGoalSource(sessionId, message.message_id, selection);
@@ -235,6 +276,18 @@ export function ChatConversation({
           </View>}
         </View>}
         {messages.map((message) => {
+          const check = publicQuickCheck(message);
+          if (check && sessionId) return <View key={message.message_id} style={styles.message}>
+            <View style={styles.attribution}><Text style={styles.author}>Dito</Text></View>
+            <QuickCheckCard intro={message.content} check={check} disabled={!!busy || generating}
+              submit={async (answers, submissionId) => {
+                applyMessage(await chat.submitQuickCheck(sessionId, message.message_id, answers, submissionId));
+              }}
+              retry={async () => { applyMessage(await chat.retryQuickCheck(sessionId, message.message_id)); }}
+              saveExplanation={(id) => knowledgeCards.saveQuickCheckExplanation(message.message_id, id)}
+              continueChat={() => continueAfterQuickCheck(message)}
+              learningGoal={() => quickCheckLearningGoal(sessionId, message)} />
+          </View>;
           const isUser = message.role === "user";
           const done = message.status === "committed";
           const canSelect = done && !!message.content.trim();
@@ -260,6 +313,7 @@ export function ChatConversation({
                   onSelectionChange={canSelect && Platform.OS === "android" ? (text) => trackSelection(message, text) : undefined}
                   selectionActions={canSelect && Platform.OS !== "android" ? [
                   { text: "添加到对话框", onPress: ({ text }) => fromRendered(message, "quote", text) },
+                  { text: "收藏为知识卡", onPress: ({ text }) => fromRendered(message, "save", text) },
                   { text: "问 Dito", visible: !!startSession, onPress: ({ text }) => fromRendered(message, "dito", text) },
                   { text: "转为学习目标", visible: !!startSession, onPress: ({ text }) => fromRendered(message, "goal", text) },
                 ] : undefined} />
@@ -273,6 +327,9 @@ export function ChatConversation({
               {renderThreadMarker?.(message.message_id)}
               {!isUser && !live && (
                 <View style={styles.tools}>
+                  {!!startSession && canSelect && typeof message.metadata?.source_user_message_id === "string" &&
+                    <ChatAction label="考考我" subtle testID="quick-check-reply-action"
+                      disabled={!canStartCheck} onPress={() => createQuickCheck(message.message_id)} />}
                   {canSelect && <ChatAction label="选文" subtle onPress={() => setSelected({ message })} />}
                   {done && message.content.length > 0 && <ChatAction label={copiedId === message.message_id ? "已复制" : "复制"}
                     subtle testID="copy-reply" onPress={() => void copyReply(message)} />}
@@ -296,14 +353,18 @@ export function ChatConversation({
         {renderedSelection && messages.some(({ message_id }) => message_id === renderedSelection.message.message_id) && (
           <View style={[styles.tools, styles.selectionActions]}>
             <ChatAction label="添加到对话框" onPress={() => fromRendered(renderedSelection.message, "quote", renderedSelection.text)} />
+            <ChatAction label="收藏为知识卡" onPress={() => fromRendered(renderedSelection.message, "save", renderedSelection.text)} />
             {startSession && <ChatAction label="问 Dito" onPress={() => fromRendered(renderedSelection.message, "dito", renderedSelection.text)} />}
             {startSession && <ChatAction label="转为学习目标" onPress={() => fromRendered(renderedSelection.message, "goal", renderedSelection.text)} />}
           </View>
         )}
         <ConversationComposer label="输入消息" testID="chat-composer" placeholder="问 Dito…" draft={draft}
+          inputRef={composerInput}
           onChangeText={setDraft} editable={!busy && !generating} send={send}
           sendDisabled={!!busy || !configured || !draft.trim()} stop={generating ? stop : undefined}
-          model={model} openModelSettings={() => router.navigate("/me")}>
+          model={model} openModelSettings={() => router.navigate("/me")}
+          action={startSession && <ChatAction label={busy === "quick-check" ? "出题中…" : "考考我"} subtle
+            testID="quick-check-composer-action" disabled={!canStartCheck} onPress={() => createQuickCheck()} />}>
           <QuoteList quotes={quotes} remove={(index) => setQuotes((current) => current.filter((_, i) => i !== index))} />
         </ConversationComposer>
       </View>
@@ -383,6 +444,7 @@ function SelectionSheet({ content, candidates, littleTutor, close, submit }: {
       {error && <Text accessibilityRole="alert" style={styles.problem}>{error}</Text>}
       <View style={styles.tools}>
         <ChatAction label="添加到对话框" disabled={busy || !excerpt.trim()} onPress={() => void choose("quote")} />
+        <ChatAction label="收藏为知识卡" disabled={busy || !excerpt.trim()} onPress={() => void choose("save")} />
         {littleTutor && <ChatAction label="问 Dito" disabled={busy || !excerpt.trim()} onPress={() => void choose("dito")} />}
         {littleTutor && <ChatAction label="转为学习目标" disabled={busy || !excerpt.trim()} onPress={() => void choose("goal")} />}
       </View>

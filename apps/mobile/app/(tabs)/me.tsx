@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { Keyboard, StyleSheet, Text, TextInput } from "react-native";
 import { importUsbConfiguration } from "../../src/configuration";
 import { BackupCard } from "../../src/components/BackupCard";
+import { ReviewReminderCard } from "../../src/components/ReviewReminderCard";
 import { Action, Card, Page, styles } from "../../src/components/Shell";
 import { useApp } from "../../src/context/AppContext";
 import { colors, spacing } from "../../src/theme";
@@ -106,6 +107,7 @@ export default function Settings() {
         {feedback && <Text accessibilityLiveRegion="polite" style={feedback.failed ? form.failure : form.success}>{feedback.message}</Text>}
       </Card>
       <BackupCard />
+      <ReviewReminderCard />
       {__DEV__ && (
         <Card title="开发工具">
           <TextInput

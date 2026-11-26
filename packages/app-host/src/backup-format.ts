@@ -8,7 +8,7 @@ export interface BackupManifest {
   app_version: string;
   schema_version: number;
   exported_at: number;
-  counts: { paths: number; sessions: number; messages: number; threads: number; interactions: number; evidence: number };
+  counts: { paths: number; sessions: number; messages: number; threads: number; interactions: number; evidence: number; knowledge_cards: number };
   includes_credentials: false;
 }
 
@@ -28,7 +28,8 @@ export class BackupError extends Error {
 export function backupCounts(payload: DatabaseSnapshot): BackupManifest["counts"] {
   return { paths: payload.learning_progress.length, sessions: payload.sessions.length, messages: payload.messages.length,
     threads: payload.session_threads.length, interactions: payload.interactions.length,
-    evidence: payload.learning_progress.reduce((count, row) => count + row.progress.learning_evidence.length, 0) };
+    evidence: payload.learning_progress.reduce((count, row) => count + row.progress.learning_evidence.length, 0),
+    knowledge_cards: payload.knowledge_cards.filter(({ deleted_at }) => deleted_at === null).length };
 }
 
 export function canonicalJson(value: unknown): string {
@@ -110,8 +111,15 @@ function records(value: unknown, id: (row: Row) => unknown, valid: (row: Row) =>
   });
 }
 
-function validPayload(value: unknown): value is DatabaseSnapshot {
-  if (!isRow(value) || Object.keys(value).length !== 7) return false;
+type LegacySnapshot = Omit<DatabaseSnapshot, "knowledge_cards">;
+
+function validPayload(value: unknown, legacy: boolean): value is LegacySnapshot & { knowledge_cards?: DatabaseSnapshot["knowledge_cards"] } {
+  if (!isRow(value) || Object.keys(value).length !== (legacy ? 7 : 8)) return false;
+  if (legacy ? Object.hasOwn(value, "knowledge_cards") : !records(value.knowledge_cards, (card) => card.card_id, (card) =>
+    allowed(card.source_kind, ["chat", "little_tutor", "mastery_card"]) &&
+    strings(card, ["title", "content", "note"]) && numbers(card, ["created_at", "updated_at"]) &&
+    (card.deleted_at === null || finite(card.deleted_at)) &&
+    [card.path_id, card.source_session_id, card.source_message_id, card.source_interaction_id].every(nullableText))) return false;
   const submissions = new Set<string>();
   return records(value.settings, (row) => row.name, validSetting) &&
     records(value.learning_progress, (row) => (row.progress as Row).book_id, (row) =>
@@ -158,10 +166,19 @@ export async function readBackup(raw: string, sha256: BackupDigest): Promise<Bac
   try { digest = await sha256(canonicalJson({ manifest, payload })); }
   catch { throw new BackupError("无法校验备份文件的完整性。"); }
   if (digest.toLowerCase() !== integrity.digest.toLowerCase()) throw new BackupError("备份完整性校验失败，文件内容可能已损坏或被修改。");
+  const legacy = manifest.schema_version < 6;
   if (manifest.includes_credentials !== false || !isText(manifest.app_version) || !manifest.app_version ||
       typeof manifest.exported_at !== "number" || !(manifest.exported_at >= 0 && manifest.exported_at <= 8.64e12) ||
-      !validPayload(payload) || canonicalJson(manifest.counts) !== canonicalJson(backupCounts(payload))) {
+      !validPayload(payload, legacy)) {
     throw new BackupError("备份清单或数据结构无效。");
   }
-  return { manifest: manifest as unknown as BackupManifest, payload, integrity: { algorithm: "sha256", digest: integrity.digest } };
+  const normalized: DatabaseSnapshot = { ...payload, knowledge_cards: payload.knowledge_cards ?? [] };
+  const counts = backupCounts(normalized);
+  const { knowledge_cards: _legacyExcluded, ...legacyCounts } = counts;
+  if (canonicalJson(manifest.counts) !== canonicalJson(legacy ? legacyCounts : counts)) {
+    throw new BackupError("备份清单或数据结构无效。");
+  }
+  return { manifest: { format_version: 1, app_version: manifest.app_version, schema_version: manifest.schema_version,
+    exported_at: manifest.exported_at, includes_credentials: false, counts },
+  payload: normalized, integrity: { algorithm: "sha256", digest: integrity.digest } };
 }

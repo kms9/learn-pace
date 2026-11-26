@@ -56,6 +56,7 @@ export function BackupCard() {
         <Text style={styles.body}>导出时间 {new Date(summary.exportedAt * 1000).toLocaleString()}</Text>
         <Text style={styles.body}>路径 {summary.counts.paths} · 会话 {summary.counts.sessions} · 消息 {summary.counts.messages}</Text>
         <Text style={styles.body}>小老师 {summary.counts.threads} · 题卡 {summary.counts.interactions} · 证据 {summary.counts.evidence}</Text>
+        <Text style={styles.body}>知识卡 {summary.counts.knowledge_cards}</Text>
         <Text style={styles.body}>备份不包含 API Key。</Text>
         <Text style={local.warning}>恢复会覆盖设备上现有的学习记录和模型设置。</Text>
         {feedback}

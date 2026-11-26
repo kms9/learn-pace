@@ -6,11 +6,11 @@ export class RestoreGateError extends Error {
 }
 
 export class RestoreGate {
-  private restoring = false;
+  private pendingRestore?: Promise<void>;
   private activeWrites = 0;
 
   private assertWritable(): void {
-    if (this.restoring) throw new RestoreGateError("正在恢复备份，请等待恢复完成。");
+    if (this.pendingRestore) throw new RestoreGateError("正在恢复备份，请等待恢复完成。");
   }
 
   async write<T>(work: () => Promise<T>): Promise<T> {
@@ -25,13 +25,20 @@ export class RestoreGate {
 
   async restore<T>(work: () => Promise<T>): Promise<T> {
     this.assertWritable();
-    this.restoring = true;
+    if (this.activeWrites) throw new RestoreGateError("请等待进行中的会话或保存操作结束，再恢复备份。");
+    let release!: () => void;
+    this.pendingRestore = new Promise<void>((resolve) => { release = resolve; });
     try {
-      if (this.activeWrites) throw new RestoreGateError("请等待进行中的会话或保存操作结束，再恢复备份。");
       return await work();
     } finally {
-      this.restoring = false;
+      this.pendingRestore = undefined;
+      release();
     }
+  }
+
+  async writeAfterRestore<T>(work: () => Promise<T>): Promise<T> {
+    while (this.pendingRestore) await this.pendingRestore;
+    return this.write(work);
   }
 }
 

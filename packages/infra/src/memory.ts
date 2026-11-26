@@ -2,8 +2,9 @@ import type { LearningProgress, PathStatus } from "@learn-pace/domain";
 import {
   SubmissionConflictError, VersionConflictError,
   type AppStore, type DatabaseSnapshot, type PathSummaryRecord, type SecretStore, type StoredDomainEvent, type StoredInteraction,
-  type StoredMessage, type StoredSession, type StoredThread,
+  type KnowledgeCardFilter, type StoredKnowledgeCard, type StoredMessage, type StoredSession, type StoredThread,
 } from "./index.js";
+import { searchKnowledgeCards } from "./knowledge-card-search.js";
 import { WriteQueue } from "./write-queue.js";
 import { insertSnapshot } from "./snapshot.js";
 
@@ -20,6 +21,7 @@ export class MemoryAppStore implements AppStore {
     messages: new Map<string, StoredMessage>(),
     threads: new Map<string, StoredThread>(),
     events: new Map<string, StoredDomainEvent>(),
+    cards: new Map<string, StoredKnowledgeCard>(),
   };
   private writes: WriteQueue | null = new WriteQueue();
 
@@ -37,7 +39,7 @@ export class MemoryAppStore implements AppStore {
 
   async exportSnapshot(): Promise<DatabaseSnapshot> {
     const read = () => {
-      const { settings, paths, sessions, messages, threads, interactions, events } = this.state;
+      const { settings, paths, sessions, messages, threads, interactions, events, cards } = this.state;
       return structuredClone({
         settings: [...settings].sort(([a], [b]) => byId(a, b)).map(([name, value]) => ({ name, value })),
         learning_progress: [...paths.values()].sort((a, b) => byId(a.progress.book_id, b.progress.book_id)),
@@ -46,6 +48,7 @@ export class MemoryAppStore implements AppStore {
         session_threads: [...threads.values()].sort((a, b) => byId(a.thread_id, b.thread_id)),
         interactions: [...interactions.values()].sort((a, b) => byId(a.interaction_id, b.interaction_id)),
         domain_events: [...events.values()],
+        knowledge_cards: [...cards.values()].sort((a, b) => byId(a.card_id, b.card_id)),
       });
     };
     return this.writes ? this.writes.run(read) : read();
@@ -134,6 +137,41 @@ export class MemoryAppStore implements AppStore {
 
   async listOpenInteractions(): Promise<StoredInteraction[]> {
     return structuredClone(this.openInteractions());
+  }
+
+  async listGradedInteractions(pathId?: string): Promise<StoredInteraction[]> {
+    return structuredClone([...this.state.interactions.values()]
+      .filter((item) => item.status === "graded" && (pathId === undefined || item.path_id === pathId))
+      .sort((a, b) => b.updated_at - a.updated_at || byId(b.interaction_id, a.interaction_id)));
+  }
+
+  async saveKnowledgeCard(card: StoredKnowledgeCard): Promise<void> {
+    await this.write(() => { this.state.cards.set(card.card_id, structuredClone(card)); });
+  }
+
+  async getKnowledgeCard(id: string): Promise<StoredKnowledgeCard | null> {
+    return structuredClone(this.state.cards.get(id) ?? null);
+  }
+
+  async listKnowledgeCards({ includeDeleted, query }: KnowledgeCardFilter = {}): Promise<StoredKnowledgeCard[]> {
+    const cards = [...this.state.cards.values()].filter(({ deleted_at }) => includeDeleted || deleted_at === null)
+      .sort((a, b) => b.updated_at - a.updated_at || byId(a.card_id, b.card_id));
+    return structuredClone(searchKnowledgeCards(cards, query));
+  }
+
+  async softDeleteKnowledgeCard(id: string, now: number): Promise<void> {
+    await this.write(() => {
+      const card = this.state.cards.get(id);
+      if (card?.deleted_at === null) Object.assign(card, { deleted_at: now, updated_at: now });
+    });
+  }
+
+  async detachKnowledgeCardsByPath(pathId: string, now: number): Promise<void> {
+    await this.write(() => {
+      for (const card of this.state.cards.values()) {
+        if (card.path_id === pathId) Object.assign(card, { path_id: null, updated_at: now });
+      }
+    });
   }
 
   async listOpenInteractionsByPath(pathId: string): Promise<StoredInteraction[]> {

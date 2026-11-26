@@ -1,6 +1,7 @@
 import { createLearningProgress, createPendingQuestion } from "@learn-pace/domain";
 import { describe, expect, it } from "vitest";
-import { SubmissionConflictError, VersionConflictError, type AppStore, type DatabaseSnapshot, type StoredDomainEvent, type StoredInteraction } from "../index.js";
+import { SubmissionConflictError, VersionConflictError, type AppStore, type DatabaseSnapshot, type StoredDomainEvent,
+  type StoredInteraction, type StoredKnowledgeCard } from "../index.js";
 
 const card: StoredInteraction = {
   interaction_id: "card", path_id: "path", session_id: "study", turn_id: "turn", status: "awaiting_input",
@@ -11,10 +12,15 @@ const event: StoredDomainEvent = {
   event_id: "event", path_id: "path", session_id: "study", turn_id: "turn", event_type: "AnswerRecorded",
   payload: { interaction_id: "card" }, created_at: 2,
 };
+const knowledge: StoredKnowledgeCard = {
+  card_id: "knowledge", source_kind: "mastery_card", title: "分数", content: "Equivalent fractions", note: "先复习",
+  path_id: "path", source_session_id: "study", source_message_id: null, source_interaction_id: "card",
+  created_at: 1, updated_at: 2, deleted_at: null,
+};
 
 export function testTransactionalStore(open: () => Promise<AppStore>) {
   describe("transactional store", () => {
-    it("exports all seven tables and replaces them in one transaction with its callback", async () => {
+    it("exports all eight tables and replaces them in one transaction with its callback", async () => {
       const store = await open();
       const session = { session_id: "study", kind: "mastery", path_id: "path", mode: "study" as const,
         title: "分数", model_id: null, created_at: 1, updated_at: 1 };
@@ -27,13 +33,14 @@ export function testTransactionalStore(open: () => Promise<AppStore>) {
         session_threads: [{ thread_id: "thread", parent_session_id: "study", source_message_id: "reply", selected_text: "内容",
           title: "侧聊", selection_start: 0, selection_end: 2, detached_at: null, created_at: 2, updated_at: 2 }],
         domain_events: [event, { ...event, event_id: "earlier-clock", created_at: 1 }],
+        knowledge_cards: [knowledge, { ...knowledge, card_id: "removed", deleted_at: 4 }],
       };
       await store.replaceSnapshot(full);
       expect(await store.exportSnapshot()).toEqual(full);
       expect((await store.listDomainEvents("path")).map(({ event_id }) => event_id)).toEqual(["earlier-clock", "event"]);
 
       const empty: DatabaseSnapshot = { settings: [], learning_progress: [], sessions: [], messages: [],
-        session_threads: [], interactions: [], domain_events: [] };
+        session_threads: [], interactions: [], domain_events: [], knowledge_cards: [] };
       await expect(store.replaceSnapshot(empty, async (tx) => {
         expect(await tx.exportSnapshot()).toEqual(empty);
         await tx.writeSetting("during", "callback");
@@ -44,6 +51,26 @@ export function testTransactionalStore(open: () => Promise<AppStore>) {
       expect(await store.exportSnapshot()).toEqual(full);
       await store.replaceSnapshot(empty, (tx) => tx.writeSetting("during", "callback"));
       expect(await store.exportSnapshot()).toEqual({ ...empty, settings: [{ name: "during", value: "callback" }] });
+    });
+
+    it("filters graded interactions and manages cards consistently", async () => {
+      const store = await open();
+      await store.insertInteraction(card);
+      const first = { ...card, interaction_id: "gradedA", status: "graded" as const };
+      const second = { ...first, interaction_id: "gradedB", path_id: "other" };
+      await store.insertInteraction(first);
+      await store.insertInteraction(second);
+      expect(await store.listGradedInteractions()).toEqual([second, first]);
+      expect(await store.listGradedInteractions("path")).toEqual([first]);
+      await store.saveKnowledgeCard(knowledge);
+      expect(await store.listKnowledgeCards({ query: " FRACTIONS " })).toEqual([knowledge]);
+      expect(await store.listKnowledgeCards({ query: "复习" })).toEqual([knowledge]);
+      await store.detachKnowledgeCardsByPath("path", 6);
+      expect(await store.getKnowledgeCard("knowledge")).toMatchObject({ path_id: null, updated_at: 6 });
+      await store.softDeleteKnowledgeCard("knowledge", 7);
+      await store.softDeleteKnowledgeCard("knowledge", 8);
+      expect(await store.listKnowledgeCards()).toEqual([]);
+      expect(await store.listKnowledgeCards({ includeDeleted: true })).toMatchObject([{ deleted_at: 7, updated_at: 7 }]);
     });
 
     it("exports a consistent view across pending writes", async () => {

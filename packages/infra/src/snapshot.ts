@@ -8,4 +8,5 @@ export async function insertSnapshot(tx: AppStore, snapshot: DatabaseSnapshot): 
   for (const thread of snapshot.session_threads) await tx.saveThread(thread);
   for (const interaction of snapshot.interactions) await tx.insertInteraction(interaction);
   for (const event of snapshot.domain_events) await tx.appendDomainEvent(event);
+  for (const card of snapshot.knowledge_cards) await tx.saveKnowledgeCard(card);
 }

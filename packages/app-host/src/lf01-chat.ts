@@ -1,8 +1,10 @@
 import type { AppStore, Clock, StoredMessage, StoredSession, StoredThread } from "@learn-pace/infra";
 import { PiDurableRuntime, type ModelConfig } from "@learn-pace/runtime";
+import { ChatQuickChecks, publicChatMessage, quickCheckExcerpt } from "./chat-quick-check.js";
 import { ChatTurns, ChatTurnError as Lf01ChatError, limitText, turnFrom,
   type ChatQuote, type History, type MessageObserver, type PrepareTurn } from "./chat-turns.js";
 import { registerMasteryNavigation, type MasteryHandoff } from "./mastery/nav-tools.js";
+import type { Answers } from "./mastery/study.js";
 import { restoreGateFor } from "./restore-gate.js";
 export { ChatTurnError as Lf01ChatError, messageQuotes, type ChatQuote } from "./chat-turns.js";
 
@@ -22,8 +24,8 @@ function parentTranscript(messages: readonly StoredMessage[]): History {
   const transcript: History[number][] = [];
   let budget = 24_000;
   for (let index = messages.length - 1; index >= 0 && budget > 0; index--) {
-    const { role, status, content } = messages[index]!;
-    if (status !== "committed" || (role !== "user" && role !== "assistant") || !content.trim()) continue;
+    const { role, status, content, metadata } = messages[index]!;
+    if (status !== "committed" || (role !== "user" && role !== "assistant") || !content.trim() || metadata?.quick_check) continue;
     const excerpt = limitText(content.trim(), 6_000);
     const size = Array.from(excerpt).length;
     if (size > budget) break;
@@ -39,6 +41,17 @@ function splitsCodePoint(content: string, index: number): boolean {
   return high >= 0xd800 && high <= 0xdbff && low >= 0xdc00 && low <= 0xdfff;
 }
 
+export function selectionInChatMessage(message: StoredMessage, selection?: ChatSelection): ChatSelection {
+  const { text, start, end } = selection ?? { text: message.content, start: 0, end: message.content.length };
+  if (!text.trim() || !Number.isInteger(start) || !Number.isInteger(end) ||
+      start < 0 || end <= start || end > message.content.length ||
+      splitsCodePoint(message.content, start) || splitsCodePoint(message.content, end) ||
+      message.content.slice(start, end) !== text) {
+    throw new Lf01ChatError("选文与原消息不一致，请重新选择");
+  }
+  return { text, start, end };
+}
+
 const chatInstructions = [
   "你是学习助手 Dito，回答学习者的问题。精通之路导航工具可查询本地路径、进度和会话。",
   "仅当学习者想系统学习、复习或继续精通之路时，查明目标后给出交接卡。仅询问进度时直接回答即可。",
@@ -47,6 +60,7 @@ const chatInstructions = [
 
 export class Lf01ChatService {
   private readonly turns: ChatTurns;
+  private readonly quickChecks: ChatQuickChecks;
 
   constructor(
     private readonly store: AppStore,
@@ -57,6 +71,7 @@ export class Lf01ChatService {
     private readonly restoreGate = restoreGateFor(store),
   ) {
     this.turns = new ChatTurns(store, clock, makeId, getModelConfig, restoreGate);
+    this.quickChecks = new ChatQuickChecks(store, clock, makeId, this.turns, restoreGate, fetch);
   }
 
   async createSession(): Promise<StoredSession> {
@@ -77,7 +92,19 @@ export class Lf01ChatService {
 
   async readConversation(sessionId: string) {
     const session = await this.chatSession(sessionId);
-    return { session, messages: await this.store.listMessages(sessionId) };
+    return { session, messages: (await this.store.listMessages(sessionId)).map(publicChatMessage) };
+  }
+
+  createQuickCheck(sessionId: string, sourceMessageId?: string) {
+    return this.quickChecks.create(sessionId, sourceMessageId);
+  }
+
+  submitQuickCheck(sessionId: string, messageId: string, answers: Answers, submissionId: string) {
+    return this.quickChecks.submit(sessionId, messageId, { id: submissionId, answers });
+  }
+
+  retryQuickCheck(sessionId: string, messageId: string) {
+    return this.quickChecks.submit(sessionId, messageId);
   }
 
   isRunning(sessionId: string): boolean {
@@ -134,7 +161,13 @@ export class Lf01ChatService {
   }
 
   async learningGoalSource(sessionId: string, messageId: string, selection?: ChatSelection): Promise<LearningGoalSource> {
-    const { text } = await this.validateSelection(sessionId, messageId, selection);
+    const message = await this.committedMessage(sessionId, messageId);
+    if (message.metadata?.quick_check !== undefined) {
+      const excerpt = quickCheckExcerpt(message);
+      if (!excerpt) throw new Lf01ChatError("请先完成自测判分");
+      return { sourceSessionId: sessionId, sourceMessageId: messageId, sourceExcerpt: excerpt };
+    }
+    const { text } = selectionInChatMessage(message, selection);
     return { sourceSessionId: sessionId, sourceMessageId: messageId, sourceExcerpt: limitText(text, 600) };
   }
 
@@ -189,20 +222,17 @@ export class Lf01ChatService {
     });
   }
 
-  private async validateSelection(sessionId: string, messageId: string, selection?: ChatSelection): Promise<ChatSelection> {
+  private async committedMessage(sessionId: string, messageId: string): Promise<StoredMessage> {
     await this.chatSession(sessionId);
     const message = await this.store.getMessage(messageId);
     if (!message || message.session_id !== sessionId || message.status !== "committed") {
       throw new Lf01ChatError("此消息无法选文，请重新选择");
     }
-    const { text, start, end } = selection ?? { text: message.content, start: 0, end: message.content.length };
-    if (!text.trim() || !Number.isInteger(start) || !Number.isInteger(end) ||
-        start < 0 || end <= start || end > message.content.length ||
-        splitsCodePoint(message.content, start) || splitsCodePoint(message.content, end) ||
-        message.content.slice(start, end) !== text) {
-      throw new Lf01ChatError("选文与原消息不一致，请重新选择");
-    }
-    return { text, start, end };
+    return message;
+  }
+
+  private async validateSelection(sessionId: string, messageId: string, selection?: ChatSelection): Promise<ChatSelection> {
+    return selectionInChatMessage(await this.committedMessage(sessionId, messageId), selection);
   }
 
   private supportsChat(session: StoredSession): boolean {

@@ -1,5 +1,5 @@
-import { useRouter } from "expo-router";
-import { useCallback, useState } from "react";
+import { useLocalSearchParams, useRouter } from "expo-router";
+import { useCallback, useEffect, useState } from "react";
 import { Pressable, StyleSheet, Text, View } from "react-native";
 import { MasteryProgress } from "../../src/components/MasteryOutline";
 import { Action, LoadingCard, ModelSetup, Page, RetryCard, StatusBadge, styles } from "../../src/components/Shell";
@@ -8,14 +8,27 @@ import { useMasteryProjection } from "../../src/context/useMasteryProjection";
 import { colors, spacing } from "../../src/theme";
 
 export default function Home() {
-  const { learningHome, mastery } = useApp();
+  const { learningHome, mastery, mistakes } = useApp();
   const router = useRouter();
+  const { reminder, noticeId } = useLocalSearchParams<{ reminder?: string; noticeId?: string }>();
   const [expanded, setExpanded] = useState(false);
-  const read = useCallback(() => learningHome.read(), [learningHome]);
+  const [notice, setNotice] = useState<string>();
+  const read = useCallback(async () => {
+    const [home, list] = await Promise.all([learningHome.read(), mistakes.listMistakes().catch(() => undefined)]);
+    return { ...home, mistakeCount: list?.length };
+  }, [learningHome, mistakes]);
   const observe = useCallback((refresh: () => void) => mastery.observeChanges(refresh), [mastery]);
   const { data, error, retry } = useMasteryProjection(read, observe);
 
+  useEffect(() => {
+    if (reminder !== "none" && reminder !== "failed") return;
+    setNotice(reminder === "none" ? "当前暂无到期复习" : "无法打开复习会话，请从学习首页重试。");
+    const timer = setTimeout(() => setNotice(undefined), 4200);
+    return () => clearTimeout(timer);
+  }, [noticeId, reminder]);
+
   return <Page title="学习">
+    {notice && <Text accessibilityLiveRegion="polite" style={styles.body}>{notice}</Text>}
     {error !== undefined && <RetryCard message="无法读取学习记录" retry={retry} />}
     {!data && error === undefined && <LoadingCard label="正在读取学习记录…" />}
     {!!data?.attention.length && <View style={local.section}>
@@ -48,6 +61,11 @@ export default function Home() {
       <Text style={local.name}>🧭 精通之路</Text>
       <Text style={styles.body}>创建一个学习目标，和导师一起定大纲、学习并复习。</Text>
     </Pressable>}
+    <View style={local.section}>
+      <Action label={data?.mistakeCount === undefined ? "错题回看" : `错题回看 · ${data.mistakeCount}`}
+        onPress={() => router.push("/learning/mistakes")} secondary />
+      <Action label="知识卡" onPress={() => router.push("/learning/cards")} secondary />
+    </View>
     <ModelSetup />
   </Page>;
 }

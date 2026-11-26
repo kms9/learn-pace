@@ -4,6 +4,7 @@ import {
   assessSemantically,
   exactVerdict,
   gradeQualitatively,
+  generateQuickCheck,
   validateStudyQuestion,
   loadModelConfigFromEnv,
   PiDurableRuntime,
@@ -314,4 +315,53 @@ it("validates and shuffles a question group with private answers at every level"
   expect(() => validateStudyQuestion({ ...input, questions: input.questions.slice(0, 1) }, () => "x", 1)).toThrow(/两至四/);
   expect(() => validateStudyQuestion({ ...input, questions: [{ ...input.questions[0]!, options: ["相同", "相同"] }, input.questions[1]!] },
     () => "x", 1)).toThrow(/不同选项/);
+});
+
+const quickCheckContext = { history: [{ role: "assistant", content: "传输中的数据可以压缩。" }] } as const;
+const quickCheckChoice = { question_type: "choice", question: "哪一种工具适合处理纯文本的体积？",
+  options: ["无损压缩器", "屏幕截图程序"], expected_answer: "无损压缩器", explanation: "可从压缩文件恢复原文。" };
+const quickCheckShort = { question_type: "short", question: "将 20 字节的内容压缩为 5 字节后，大小变为原值的几分之几？",
+  expected_answer: "1/4", explanation: "用压缩后的大小除以原始大小。" };
+
+function quickCheckModel(questions: unknown[], intro = "来做个自测。") {
+  return mockDeepSeek(completion([text(JSON.stringify({ intro, questions }))]));
+}
+
+it("requests quick-check JSON and keeps the correct answer aligned with shuffled options", async () => {
+  const fetch = quickCheckModel([quickCheckChoice, quickCheckShort]);
+  const random = vi.spyOn(Math, "random").mockReturnValue(0);
+  let id = 0;
+  try {
+    const result = await generateQuickCheck(modelConfig, { ...quickCheckContext, makeId: () => String(++id) });
+    expect(result).toMatchObject({ intro: "来做个自测。", questions: [
+      { question_id: "1", question_type: "choice", expected_answer: "B", options: [
+        { label: "A", body: "屏幕截图程序" }, { label: "B", body: "无损压缩器" },
+      ] },
+      { question_id: "2", question_type: "short", expected_answer: "1/4" },
+    ] });
+    expect(JSON.parse(String(fetch.mock.calls[0]?.[1]?.body)).response_format).toEqual({ type: "json_object" });
+  } finally {
+    random.mockRestore();
+  }
+});
+
+it("accepts a single quick-check question", async () => {
+  quickCheckModel([quickCheckChoice]);
+  expect((await generateQuickCheck(modelConfig, quickCheckContext)).questions).toHaveLength(1);
+});
+
+it.each([
+  ["没有题目", []],
+  ["超过两题", [quickCheckChoice, quickCheckShort, quickCheckChoice]],
+  ["选项重复", [{ ...quickCheckChoice, options: ["无损压缩器", "无损压缩器"] }]],
+  ["答案不在选项中", [{ ...quickCheckChoice, expected_answer: "编辑器" }]],
+  ["缺少答案", [{ ...quickCheckShort, expected_answer: undefined }]],
+])("拒绝无效自测（%s）", async (_name, questions) => {
+  quickCheckModel(questions);
+  await expect(generateQuickCheck(modelConfig, quickCheckContext)).rejects.toMatchObject({ code: "invalid_questions" });
+});
+
+it("rejects a quick-check introduction that gives away an answer", async () => {
+  quickCheckModel([quickCheckChoice], "先记住无损压缩器。");
+  await expect(generateQuickCheck(modelConfig, quickCheckContext)).rejects.toMatchObject({ code: "answer_leak" });
 });

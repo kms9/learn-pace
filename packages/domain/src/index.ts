@@ -4,6 +4,7 @@ export * from "./mastery.js";
 export * from "./pending.js";
 export * from "./scheduler.js";
 export * from "./review-strategy.js";
+export * from "./reminders.js";
 export * from "./policy.js";
 export * from "./objective-relations.js";
 export * from "./outline-identity.js";

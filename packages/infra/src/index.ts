@@ -59,6 +59,7 @@ export interface InteractionGrade {
 export interface InteractionStore {
   getOpenInteraction(pathId: string): Promise<StoredInteraction | null>;
   listOpenInteractions(): Promise<StoredInteraction[]>;
+  listGradedInteractions(pathId?: string): Promise<StoredInteraction[]>;
   getInteraction(id: string): Promise<StoredInteraction | null>;
   insertInteraction(interaction: StoredInteraction): Promise<void>;
   saveAnswer(id: string, submissionId: string, rawAnswer: string, now: number): Promise<void>;
@@ -165,6 +166,34 @@ export interface StoredDomainEvent {
   created_at: number;
 }
 
+export interface StoredKnowledgeCard {
+  card_id: string;
+  source_kind: "chat" | "little_tutor" | "mastery_card";
+  title: string;
+  content: string;
+  note: string;
+  path_id: string | null;
+  source_session_id: string | null;
+  source_message_id: string | null;
+  source_interaction_id: string | null;
+  created_at: number;
+  updated_at: number;
+  deleted_at: number | null;
+}
+
+export interface KnowledgeCardFilter {
+  includeDeleted?: boolean;
+  query?: string;
+}
+
+export interface KnowledgeCardStore {
+  saveKnowledgeCard(card: StoredKnowledgeCard): Promise<void>;
+  getKnowledgeCard(id: string): Promise<StoredKnowledgeCard | null>;
+  listKnowledgeCards(options?: KnowledgeCardFilter): Promise<StoredKnowledgeCard[]>;
+  softDeleteKnowledgeCard(id: string, now: number): Promise<void>;
+  detachKnowledgeCardsByPath(pathId: string, now: number): Promise<void>;
+}
+
 export interface DatabaseSnapshot {
   settings: { name: string; value: string }[];
   learning_progress: { progress: LearningProgress; status: PathStatus }[];
@@ -173,9 +202,10 @@ export interface DatabaseSnapshot {
   messages: StoredMessage[];
   session_threads: StoredThread[];
   domain_events: StoredDomainEvent[];
+  knowledge_cards: StoredKnowledgeCard[];
 }
 
-export interface AppStore extends SettingsStore, LearningProgressStore, InteractionStore, SessionStore, MessageStore, ThreadStore {
+export interface AppStore extends SettingsStore, LearningProgressStore, InteractionStore, SessionStore, MessageStore, ThreadStore, KnowledgeCardStore {
   /** 所有事务内读写都使用 tx。嵌套事务复用 tx，随外层事务一起提交或回滚。 */
   runInTransaction<T>(work: (tx: AppStore) => Promise<T>): Promise<T>;
   exportSnapshot(): Promise<DatabaseSnapshot>;

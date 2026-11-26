@@ -4,7 +4,7 @@ interface MigrationDatabase {
   getAllAsync<T>(sql: string): Promise<T[]>;
 }
 
-export const databaseSchemaVersion = 5;
+export const databaseSchemaVersion = 6;
 
 export async function migrateLearningDatabase(db: MigrationDatabase): Promise<void> {
   await db.execAsync("PRAGMA journal_mode = WAL");
@@ -15,7 +15,37 @@ export async function migrateLearningDatabase(db: MigrationDatabase): Promise<vo
   if (version < 2) await migrateV2(db);
   if (version < 3) await migrateV3(db);
   if (version < 4) await migrateV4(db);
-  await migrateV5(db);
+  if (version < 5) await migrateV5(db);
+  await migrateV6(db);
+}
+
+async function migrateV6(db: MigrationDatabase): Promise<void> {
+  await db.execAsync("BEGIN IMMEDIATE");
+  try {
+    await db.execAsync(`
+      CREATE TABLE IF NOT EXISTS knowledge_cards (
+        card_id TEXT PRIMARY KEY NOT NULL,
+        source_kind TEXT NOT NULL CHECK (source_kind IN ('chat', 'little_tutor', 'mastery_card')),
+        title TEXT NOT NULL,
+        content TEXT NOT NULL,
+        note TEXT NOT NULL DEFAULT '',
+        path_id TEXT,
+        source_session_id TEXT,
+        source_message_id TEXT,
+        source_interaction_id TEXT,
+        created_at REAL NOT NULL,
+        updated_at REAL NOT NULL,
+        deleted_at REAL
+      );
+      CREATE INDEX IF NOT EXISTS knowledge_cards_active_by_update
+        ON knowledge_cards (updated_at DESC, card_id) WHERE deleted_at IS NULL;
+      PRAGMA user_version = 6;
+    `);
+    await db.execAsync("COMMIT");
+  } catch (error) {
+    await db.execAsync("ROLLBACK").catch(() => {});
+    throw error;
+  }
 }
 
 async function migrateV5(db: MigrationDatabase): Promise<void> {

@@ -4,8 +4,9 @@ import type { LearningProgress, PathStatus, PendingQuestion } from "@learn-pace/
 import {
   SubmissionConflictError, VersionConflictError,
   type AppStore, type DatabaseSnapshot, type PathSummaryRecord, type SecretStore, type StoredDomainEvent, type StoredInteraction,
-  type StoredMessage, type StoredSession, type StoredThread,
+  type KnowledgeCardFilter, type StoredKnowledgeCard, type StoredMessage, type StoredSession, type StoredThread,
 } from "./index.js";
+import { searchKnowledgeCards } from "./knowledge-card-search.js";
 import { migrateLearningDatabase } from "./migrations.js";
 import { insertSnapshot } from "./snapshot.js";
 import { WriteQueue } from "./write-queue.js";
@@ -72,15 +73,17 @@ export class ExpoLearningStore implements AppStore {
     const threads = await this.db.getAllAsync<StoredThread>("SELECT * FROM session_threads ORDER BY thread_id");
     const interactions = await this.db.getAllAsync<InteractionRow>("SELECT * FROM interactions ORDER BY interaction_id");
     const events = await this.db.getAllAsync<DomainEventRow>("SELECT * FROM domain_events ORDER BY rowid");
+    const cards = await this.db.getAllAsync<StoredKnowledgeCard>("SELECT * FROM knowledge_cards ORDER BY card_id");
     return { settings, learning_progress: paths.map(({ progress, version, status }) => ({
       progress: { ...JSON.parse(progress) as LearningProgress, version }, status,
     })), sessions, messages: messages.map(decodeMessage), session_threads: threads,
-    interactions: interactions.map(decodeInteraction), domain_events: events.map(decodeDomainEvent) };
+    interactions: interactions.map(decodeInteraction), domain_events: events.map(decodeDomainEvent), knowledge_cards: cards };
   }
 
   async replaceSnapshot(snapshot: DatabaseSnapshot, afterReplace?: (tx: AppStore) => Promise<void>): Promise<void> {
     if (this.writes) return this.runInTransaction((tx) => tx.replaceSnapshot(snapshot, afterReplace));
     await this.db.execAsync(`
+      DELETE FROM knowledge_cards;
       DELETE FROM domain_events;
       DELETE FROM interactions;
       DELETE FROM session_threads;
@@ -177,6 +180,46 @@ export class ExpoLearningStore implements AppStore {
       ORDER BY updated_at DESC, interaction_id
     `);
     return rows.map(decodeInteraction);
+  }
+
+  async listGradedInteractions(pathId?: string): Promise<StoredInteraction[]> {
+    const order = "ORDER BY updated_at DESC, interaction_id DESC";
+    const rows = pathId === undefined
+      ? await this.db.getAllAsync<InteractionRow>(`SELECT * FROM interactions WHERE status = 'graded' ${order}`)
+      : await this.db.getAllAsync<InteractionRow>(`SELECT * FROM interactions WHERE path_id = ? AND status = 'graded' ${order}`, pathId);
+    return rows.map(decodeInteraction);
+  }
+
+  async saveKnowledgeCard(card: StoredKnowledgeCard): Promise<void> {
+    await this.run(`
+      INSERT INTO knowledge_cards (card_id, source_kind, title, content, note, path_id, source_session_id,
+        source_message_id, source_interaction_id, created_at, updated_at, deleted_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT (card_id) DO UPDATE SET source_kind = excluded.source_kind, title = excluded.title,
+        content = excluded.content, note = excluded.note, path_id = excluded.path_id,
+        source_session_id = excluded.source_session_id, source_message_id = excluded.source_message_id,
+        source_interaction_id = excluded.source_interaction_id, created_at = excluded.created_at,
+        updated_at = excluded.updated_at, deleted_at = excluded.deleted_at
+    `, card.card_id, card.source_kind, card.title, card.content, card.note, card.path_id, card.source_session_id,
+    card.source_message_id, card.source_interaction_id, card.created_at, card.updated_at, card.deleted_at);
+  }
+
+  getKnowledgeCard(id: string): Promise<StoredKnowledgeCard | null> {
+    return this.db.getFirstAsync<StoredKnowledgeCard>("SELECT * FROM knowledge_cards WHERE card_id = ?", id);
+  }
+
+  async listKnowledgeCards({ includeDeleted, query }: KnowledgeCardFilter = {}): Promise<StoredKnowledgeCard[]> {
+    const where = includeDeleted ? "" : "WHERE deleted_at IS NULL";
+    const cards = await this.db.getAllAsync<StoredKnowledgeCard>(`SELECT * FROM knowledge_cards ${where} ORDER BY updated_at DESC, card_id`);
+    return searchKnowledgeCards(cards, query);
+  }
+
+  async softDeleteKnowledgeCard(id: string, now: number): Promise<void> {
+    await this.run("UPDATE knowledge_cards SET deleted_at = ?, updated_at = ? WHERE card_id = ? AND deleted_at IS NULL", now, now, id);
+  }
+
+  async detachKnowledgeCardsByPath(pathId: string, now: number): Promise<void> {
+    await this.run("UPDATE knowledge_cards SET path_id = NULL, updated_at = ? WHERE path_id = ?", now, pathId);
   }
 
   async listOpenInteractionsByPath(pathId: string): Promise<StoredInteraction[]> {

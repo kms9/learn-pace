@@ -141,6 +141,7 @@ export default function MasteryPath() {
     {hasOutline && <ReviewPlan plan={topic.reviewPlan} busy={busy} locate={locateObjective} start={startReview}
       chooseStrategy={(id) => run(() => mastery.setReviewStrategy(pathId, id))}
       setRetention={(target) => run(() => mastery.setDesiredRetention(pathId, target))} />}
+    <Action label="错题回看" onPress={() => router.push({ pathname: "/learning/mistakes", params: { pathId } })} secondary />
     {(topic.goal && topic.goal !== topic.name || material.length > 0) && <Card title="目标与资料">
       {topic.goal !== topic.name && !!topic.goal && <Text style={styles.body}>{topic.goal}</Text>}
       {material.length > 0 && <View style={local.chips}>

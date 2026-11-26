@@ -6,6 +6,7 @@ import { createLearningProgress, createPendingQuestion } from "@learn-pace/domai
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { MemoryAppStore } from "../index.js";
 import { ExpoLearningStore } from "../expo.js";
+import { migrateLearningDatabase } from "../migrations.js";
 import { testTransactionalStore } from "./store-transactions.js";
 
 let db: DatabaseSync;
@@ -15,8 +16,8 @@ vi.mock("expo-secure-store", () => ({}));
 function sqliteConnection(connection: DatabaseSync) {
   return {
     execAsync: async (sql: string) => connection.exec(sql),
-    getFirstAsync: async (sql: string, ...params: SQLInputValue[]) => connection.prepare(sql).get(...params) ?? null,
-    getAllAsync: async (sql: string, ...params: SQLInputValue[]) => connection.prepare(sql).all(...params),
+    getFirstAsync: async <T>(sql: string, ...params: SQLInputValue[]) => (connection.prepare(sql).get(...params) ?? null) as T | null,
+    getAllAsync: async <T>(sql: string, ...params: SQLInputValue[]) => connection.prepare(sql).all(...params) as T[],
     runAsync: async (sql: string, ...params: SQLInputValue[]) => connection.prepare(sql).run(...params),
   };
 }
@@ -67,9 +68,9 @@ it("keeps the SQL version column synchronized with the stored progress JSON", as
     .toEqual({ version: 7, json_version: 7 });
 });
 
-it("opens a new WAL database and round-trips the v5 repositories", async () => {
+it("opens a new WAL database and round-trips the v6 repositories", async () => {
   const store = await ExpoLearningStore.open();
-  expect(db.prepare("PRAGMA user_version").get()).toMatchObject({ user_version: 5 });
+  expect(db.prepare("PRAGMA user_version").get()).toMatchObject({ user_version: 6 });
   expect(await store.inspect()).toMatchObject({ journalMode: "wal", paths: 0 });
   const session = {
     session_id: "s", kind: "chat", path_id: null, mode: null, title: "Ratios",
@@ -143,10 +144,10 @@ it.each([0, 1])("migrates populated v%s data and resumes a partial migration", a
   expect(await reopened.listPathSummaries()).toEqual([
     { path_id: "old", name: "Renamed", status: "draft", updated_at: 200 },
   ]);
-  expect(db.prepare("PRAGMA user_version").get()).toMatchObject({ user_version: 5 });
+  expect(db.prepare("PRAGMA user_version").get()).toMatchObject({ user_version: 6 });
 });
 
-it.each([false, true])("preserves v2 threads during v5 upgrade (partial=%s)", async (partial) => {
+it.each([false, true])("preserves v2 threads during upgrade to v6 (partial=%s)", async (partial) => {
   db.exec(`
     PRAGMA user_version = 2;
     CREATE TABLE learning_progress (path_id TEXT PRIMARY KEY NOT NULL, progress TEXT NOT NULL);
@@ -167,10 +168,10 @@ it.each([false, true])("preserves v2 threads during v5 upgrade (partial=%s)", as
     selection_start: partial ? 3 : null, selection_end: null, detached_at: null,
   });
   expect(await (await ExpoLearningStore.open()).getThread("child")).toEqual(await store.getThread("child"));
-  expect(db.prepare("PRAGMA user_version").get()).toMatchObject({ user_version: 5 });
+  expect(db.prepare("PRAGMA user_version").get()).toMatchObject({ user_version: 6 });
 });
 
-it("migrates a populated v3 interaction table to v5", async () => {
+it("migrates a populated v3 interaction table to v6", async () => {
   db.exec(`
     PRAGMA user_version = 3;
     CREATE TABLE learning_progress (path_id TEXT PRIMARY KEY NOT NULL, progress TEXT NOT NULL);
@@ -186,7 +187,7 @@ it("migrates a populated v3 interaction table to v5", async () => {
       .run(status, status, JSON.stringify(question), `sub-${status}`);
   }
   const store = await ExpoLearningStore.open();
-  expect(db.prepare("PRAGMA user_version").get()).toMatchObject({ user_version: 5 });
+  expect(db.prepare("PRAGMA user_version").get()).toMatchObject({ user_version: 6 });
   for (const status of ["awaiting_input", "answered", "graded"]) {
     expect(await (await ExpoLearningStore.open()).getInteraction(status)).toMatchObject({
       status, question, raw_answer: "raw", submission_id: `sub-${status}`,
@@ -231,7 +232,7 @@ it("upgrades v4 in place, preserves old messages and keeps the latest duplicate 
   db.exec("DROP TRIGGER fail_dedup");
   await ExpoLearningStore.open();
   const reopened = await ExpoLearningStore.open();
-  expect(db.prepare("PRAGMA user_version").get()).toMatchObject({ user_version: 5 });
+  expect(db.prepare("PRAGMA user_version").get()).toMatchObject({ user_version: 6 });
   expect(await reopened.get("p")).toEqual(progress);
   expect(db.prepare("SELECT path_id, version FROM learning_progress ORDER BY path_id").all()).toEqual([
     { path_id: "legacy", version: 0 }, { path_id: "p", version: 7 },
@@ -270,4 +271,22 @@ it.each(["expo", "memory"])("round-trips staged group answers and grades with %s
   expect((await reopened.listInteractionsBySession("session"))[0]).toMatchObject({
     status: "graded", question: { questions: [{ expected_answer: "新答案" }] }, raw_answer: first.raw_answer, grade: next.grade,
   });
+});
+
+it("atomically upgrades v5 to v6 and rolls back table, index and version on failure", async () => {
+  const preexisting = await ExpoLearningStore.open();
+  await preexisting.writeSetting("v5", "旧数据");
+  db.exec("DROP TABLE knowledge_cards; PRAGMA user_version = 5;");
+  const connection = sqliteConnection(db);
+  await expect(migrateLearningDatabase({ ...connection, execAsync: async (sql) => {
+    await connection.execAsync(sql);
+    if (sql.includes("CREATE TABLE IF NOT EXISTS knowledge_cards")) throw new Error("injected v6 migration failure");
+  } })).rejects.toThrow("injected v6 migration failure");
+  expect(db.prepare("PRAGMA user_version").get()).toMatchObject({ user_version: 5 });
+  expect(db.prepare("SELECT name FROM sqlite_schema WHERE name LIKE 'knowledge_cards%'").all()).toEqual([]);
+  expect(await preexisting.readSetting("v5")).toBe("旧数据");
+  const migrated = await ExpoLearningStore.open();
+  expect(db.prepare("PRAGMA user_version").get()).toMatchObject({ user_version: 6 });
+  expect(await migrated.listKnowledgeCards()).toEqual([]);
+  expect(await migrated.readSetting("v5")).toBe("旧数据");
 });

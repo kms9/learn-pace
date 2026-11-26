@@ -1,11 +1,12 @@
 import { MasterySessionError, RestoreGateError, type TopicMaterial } from "@learn-pace/app-host";
-import type { StoredMessage, StoredSession } from "@learn-pace/infra";
+import type { StoredKnowledgeCard, StoredMessage, StoredSession } from "@learn-pace/infra";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { useHeaderHeight } from "expo-router/react-navigation";
 import { useEffect, useRef, useState, type ComponentRef } from "react";
 import { Keyboard, KeyboardAvoidingView, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
 import { Action, Card, LoadingCard, ModelSetup, Page, RetryCard, styles } from "../../src/components/Shell";
 import { ChatSearch } from "../../src/components/chat-controls";
+import { MessageContent } from "../../src/components/MessageContent";
 import { useApp } from "../../src/context/AppContext";
 import { colors, spacing } from "../../src/theme";
 
@@ -15,7 +16,7 @@ export default function NewMasteryTopic() {
   const { sourceSessionId, sourceMessageId, sourceExcerpt } = useLocalSearchParams<{
     sourceSessionId?: string; sourceMessageId?: string; sourceExcerpt?: string;
   }>();
-  const { mastery, snapshot } = useApp();
+  const { mastery, knowledgeCards, snapshot } = useApp();
   const router = useRouter();
   const headerHeight = useHeaderHeight();
   const [step, setStep] = useState(1);
@@ -27,6 +28,9 @@ export default function NewMasteryTopic() {
       material: { kind: "chat", sessionId: sourceSessionId, messageId: sourceMessageId, excerpt: sourceExcerpt },
     }] : []);
   const [sessions, setSessions] = useState<StoredSession[]>();
+  const [cards, setCards] = useState<StoredKnowledgeCard[]>();
+  const [cardsError, setCardsError] = useState(false);
+  const [cardsAttempt, setCardsAttempt] = useState(0);
   const [query, setQuery] = useState("");
   const [showAllSessions, setShowAllSessions] = useState(false);
   const [expanded, setExpanded] = useState<string>();
@@ -56,6 +60,14 @@ export default function NewMasteryTopic() {
     }).catch(() => { if (active) setSessionError(true); });
     return () => { active = false; };
   }, [mastery, sessionAttempt, step]);
+
+  useEffect(() => {
+    if (step !== 2) return;
+    let active = true;
+    void knowledgeCards.list().then((result) => { if (active) setCards(result); })
+      .catch(() => { if (active) setCardsError(true); });
+    return () => { active = false; };
+  }, [knowledgeCards, cardsAttempt, step]);
 
   useEffect(() => {
     if (!expanded) return;
@@ -138,12 +150,29 @@ export default function NewMasteryTopic() {
     </Card> : <>
       {!!materials.length && <Card title="已选资料">
         {materials.map(({ key, label, material }) => <View key={key} style={local.material}>
-          <Text style={styles.heading}>{label}</Text>
+          {material.kind === "text_note" && material.label
+            ? <MessageContent content={"### " + label} /> : <Text style={styles.heading}>{label}</Text>}
           {material.kind === "chat" && material.excerpt && <Text style={styles.body}>{material.excerpt}</Text>}
           {material.kind === "text_note" && <Text style={styles.body}>{material.text}</Text>}
           <Action label="移除资料" onPress={() => setMaterials((items) => items.filter((item) => item.key !== key))} secondary />
         </View>)}
       </Card>}
+      <Card title="从知识卡选择">
+        {cardsError ? <RetryCard message="无法读取知识卡"
+          retry={() => { setCardsError(false); setCardsAttempt((value) => value + 1); }} />
+          : !cards && <LoadingCard label="正在读取知识卡…" />}
+        {cards?.length === 0 && <Text style={styles.body}>还没有收藏的知识卡。</Text>}
+        {cards?.map((card) => {
+          const key = "knowledge-card-" + card.card_id;
+          const checked = materials.some((item) => item.key === key);
+          return <Pressable key={key} accessibilityRole="checkbox" accessibilityState={{ checked }} style={local.material}
+            onPress={() => select(key, card.title, { kind: "text_note", label: card.title, text: card.content })}>
+            <MessageContent content={"### " + card.title} />
+            <Text style={styles.body} numberOfLines={2}>{card.content}</Text>
+            <Text style={local.link}>{checked ? "取消选择知识卡" : "选择这张知识卡"}</Text>
+          </Pressable>;
+        })}
+      </Card>
       <Card title="问答会话">
         <ChatSearch label="搜索问答会话" value={query} change={setQuery} />
         {sessionError ? <RetryCard message="无法读取问答会话"

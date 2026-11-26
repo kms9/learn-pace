@@ -1,7 +1,7 @@
 import { chatTitleFromPrompt, messageHandoffs, type Lf01ChatService } from "@learn-pace/app-host";
 import type { StoredSession, StoredThread } from "@learn-pace/infra";
-import { useFocusEffect, useRouter } from "expo-router";
-import { useCallback, useState } from "react";
+import { useFocusEffect, useLocalSearchParams, useRouter } from "expo-router";
+import { useCallback, useEffect, useState } from "react";
 import { Alert, Keyboard, KeyboardAvoidingView, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { ChatConversation } from "../../src/components/ChatConversation";
@@ -16,6 +16,7 @@ type Sheet = { kind: "history" | "menu" } | { kind: "threads"; messageId?: strin
 export default function Chat() {
   const { chat, reload } = useApp();
   const router = useRouter();
+  const { openSessionId } = useLocalSearchParams<{ openSessionId?: string }>();
   const [conversation, setConversation] = useState<Conversation | null>(null);
   const [version, setVersion] = useState(0);
   const [sessions, setSessions] = useState<StoredSession[]>([]);
@@ -27,6 +28,22 @@ export default function Chat() {
   const sessionId = conversation?.session.session_id;
   const search = query.trim().toLocaleLowerCase();
   const visibleSessions = sessions.filter(({ title }) => title.toLocaleLowerCase().includes(search));
+
+  useEffect(() => {
+    if (!openSessionId) return;
+    let active = true;
+    setNavigating(true);
+    setError(undefined);
+    void Promise.all([chat.readConversation(openSessionId), chat.listThreads(openSessionId)]).then(([session, records]) => {
+      if (!active) return;
+      setConversation(session);
+      setThreads(records);
+      setVersion((value) => value + 1);
+      setSheet(null);
+    }).catch(() => { if (active) setError("无法打开原问答会话"); })
+      .finally(() => { if (active) setNavigating(false); });
+    return () => { active = false; };
+  }, [chat, openSessionId]);
 
   useFocusEffect(useCallback(() => {
     if (!sessionId) return;

@@ -42,6 +42,9 @@ const full: DatabaseSnapshot = {
     raw_answer: "1/2", submission_id: "submission", updated_at: 3 }],
   domain_events: [{ event_id: "grade", path_id: "path", session_id: "study", turn_id: "question-turn",
     event_type: "AssessmentCommitted", payload: { interaction_id: "card" }, created_at: 4 }],
+  knowledge_cards: [{ card_id: "knowledge", source_kind: "mastery_card", title: "约分", content: "同时除以公因数",
+    note: "复习时练习", path_id: "path", source_session_id: "study", source_message_id: null, source_interaction_id: "card",
+    created_at: 1, updated_at: 1, deleted_at: null }],
 };
 
 async function withBackup(baseUrl = gatewayB, payload = full) {
@@ -63,11 +66,28 @@ it("exports all learning data, excludes device key names and values, and restore
   expect(JSON.parse(envelope.payload.settings.find(({ name }) => name === modelSetting)!.value).credentialRef).toBeNull();
   const target = harness("target");
   expect(await target.backup.inspectBackup(raw)).toEqual({ exportedAt: startedAt, counts: {
-    paths: 1, sessions: 3, messages: 2, threads: 1, interactions: 1, evidence: 1,
+    paths: 1, sessions: 3, messages: 2, threads: 1, interactions: 1, evidence: 1, knowledge_cards: 1,
   }, model: { baseUrl: gatewayB, model: "openai/deepseek-v4.1-flash" } });
   await target.backup.restoreBackup(raw);
   expect(await target.store.exportSnapshot()).toEqual(envelope.payload);
   expect((await target.app.snapshot()).model).toMatchObject({ configured: false, settings: { baseUrl: gatewayB } });
+});
+
+it("authenticates the original seven-table v5 backup before adding an empty knowledge-card list", async () => {
+  const { envelope } = await withBackup();
+  const { knowledge_cards: _cards, ...payload } = envelope.payload;
+  const { knowledge_cards: _count, ...counts } = envelope.manifest.counts;
+  const manifest = { ...envelope.manifest, schema_version: 5, counts };
+  const digest = await sha256(canonicalJson({ manifest, payload }));
+  const raw = JSON.stringify({ manifest, payload, integrity: { algorithm: "sha256", digest } });
+  const target = harness("legacy");
+  await target.store.saveKnowledgeCard(full.knowledge_cards[0]!);
+  expect((await target.backup.inspectBackup(raw)).counts.knowledge_cards).toBe(0);
+  await target.backup.restoreBackup(raw);
+  expect(await target.store.exportSnapshot()).toEqual({ ...payload, knowledge_cards: [] });
+  await expect(target.backup.inspectBackup(raw.replace('"paths":1', '"paths":2'))).rejects.toThrow("完整性");
+  const versionSix = await target.backup.exportBackup();
+  expect(versionSix.manifest).toMatchObject({ schema_version: 6, counts: { knowledge_cards: 0 } });
 });
 
 it("keeps the valid device key for an import from the same origin only", async () => {

@@ -1,14 +1,17 @@
-import { AppBootstrapService, LearningHomeService, type BackupRestoreService, type BootstrapSnapshot, type Lf01ChatService, type MasterySessionService } from "@learn-pace/app-host";
+import { AppBootstrapService, KnowledgeCardService, LearningHomeService, MistakeReviewService, type BackupRestoreService, type BootstrapSnapshot, type Lf01ChatService,
+  type MasterySessionService, type ReviewReminderService } from "@learn-pace/app-host";
 import { systemClock, type Clock } from "@learn-pace/infra";
 import { ExpoLearningStore, expoSecretStore } from "@learn-pace/infra/expo";
 import Constants from "expo-constants";
 import { randomUUID } from "expo-crypto";
 import { fetch as expoFetch } from "expo/fetch";
+import { useRootNavigationState, useRouter } from "expo-router";
 import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from "react";
-import { ActivityIndicator, Button, StyleSheet, Text, View } from "react-native";
+import { ActivityIndicator, AppState, Button, StyleSheet, Text, View } from "react-native";
 import { colors, spacing } from "../theme";
 import mobileConfig from "../../app.json";
 import { sha256Backup } from "../backup-io";
+import { observeReviewNotificationTaps, reviewNotifications } from "../notifications";
 
 type AppContextValue = {
   service: AppBootstrapService;
@@ -16,6 +19,9 @@ type AppContextValue = {
   mastery: MasterySessionService;
   learningHome: LearningHomeService;
   backup: BackupRestoreService;
+  reminders: ReviewReminderService;
+  knowledgeCards: KnowledgeCardService;
+  mistakes: MistakeReviewService;
   clock: Clock;
   devClock?: { days: number; setDays: (days: number) => void };
   snapshot: BootstrapSnapshot;
@@ -63,19 +69,33 @@ export function AppProvider({ children }: { children: ReactNode }) {
       const mastery = service.createMasterySessionService(clock);
       const learningHome = new LearningHomeService(store, clock);
       const backup = service.createBackupRestoreService(Constants.expoConfig?.version ?? mobileConfig.expo.version, sha256Backup);
+      const reminders = service.createReviewReminderService(reviewNotifications, clock);
+      const knowledgeCards = new KnowledgeCardService(store, clock, randomUUID);
+      const mistakes = new MistakeReviewService(store);
       const snapshot = await service.snapshot();
       if (!mounted) return;
       const reload = async () => {
         const latest = await service.snapshot();
         if (mounted) setData((current) => current?.service === service ? { ...current, snapshot: latest } : current);
       };
-      setData({ service, chat, mastery, learningHome, backup, snapshot, reload, inspectDatabase: () => store.inspect() });
+      setData({ service, chat, mastery, learningHome, backup, reminders, knowledgeCards, mistakes, snapshot, reload,
+        inspectDatabase: () => store.inspect() });
     }
     void open().catch(() => {
       if (mounted) setFailed(true);
     });
     return () => { mounted = false; };
   }, [attempt, clock]);
+
+  const reminders = data?.reminders;
+  useEffect(() => {
+    if (!reminders) return;
+    void reminders.reschedule();
+    const listener = AppState.addEventListener("change", (state) => {
+      if (state === "active") void reminders.reschedule();
+    });
+    return () => listener.remove();
+  }, [reminders, days]);
 
   if (!data) {
     return (
@@ -96,7 +116,20 @@ export function AppProvider({ children }: { children: ReactNode }) {
   }
 
   const devClock = __DEV__ ? { days, setDays: (next: number) => { offset.current = next; setDays(next); } } : undefined;
-  return <AppContext.Provider value={{ ...data, clock, devClock, restart }}>{children}</AppContext.Provider>;
+  return <AppContext.Provider value={{ ...data, clock, devClock, restart }}>
+    {children}
+    <ReviewNotificationNavigation />
+  </AppContext.Provider>;
+}
+
+function ReviewNotificationNavigation() {
+  const ready = Boolean(useRootNavigationState()?.key);
+  const router = useRouter();
+  useEffect(() => {
+    if (!ready) return;
+    return observeReviewNotificationTaps((id) => router.navigate({ pathname: "/review-reminder", params: { id } }));
+  }, [ready, router]);
+  return null;
 }
 
 export function useApp() {

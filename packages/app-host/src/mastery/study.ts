@@ -115,6 +115,7 @@ export class StudyInteractions {
     private readonly read: (pathId: string) => Promise<LearningProgress>,
     private readonly save: (progress: LearningProgress) => Promise<void>,
     private readonly fetch?: typeof globalThis.fetch,
+    private readonly reviewChanged?: (requestPermission: boolean) => void,
   ) {}
 
   async postQuiz(context: StudyTurn, input: Parameters<typeof validateStudyQuestion>[0]) {
@@ -284,7 +285,7 @@ export class StudyInteractions {
         return failed;
       });
     }
-    return this.store.runInTransaction(async (tx) => {
+    const committed = await this.store.runInTransaction(async (tx) => {
       const current = await tx.getInteraction(row.interaction_id);
       if (current?.status !== "answered" || !sameSubmission(current, row)) return undefined;
       const progress = await requireProgressVersion(tx, prior);
@@ -307,6 +308,8 @@ export class StudyInteractions {
       });
       return graded;
     });
+    if (committed && final.length) this.reviewChanged?.(true);
+    return committed;
   }
 
   async assess(context: StudyTurn, pointId: string) {
@@ -371,6 +374,7 @@ export class StudyInteractions {
         ...(verdict.final && { evidence_id: id }),
       });
     });
+    if (assessed !== progress) this.reviewChanged?.(true);
     return { ok: true, final: verdict.final, result: verdict.result,
       ...(verdict.final && { mastered: isMastered(assessed, kp), criteria_met: verdict.criteria_met }),
       feedback: verdict.feedback };
@@ -460,6 +464,7 @@ export class StudyInteractions {
         input.action === "void" ? "AssessmentVoided" : "AssessmentCorrected", now,
         { interaction_id: row.interaction_id, submission_id: row.submission_id, question_id: question.question_id, reason });
     });
+    this.reviewChanged?.(false);
     return { ok: true, action: input.action, question_id: question.question_id, status: updated.status };
   }
 }

@@ -38,7 +38,7 @@ export async function gradeQualitatively(
 }
 
 export async function requestAssessmentJson(config: ModelConfig, instructions: string, data: object,
-  signal?: AbortSignal, fetch?: typeof globalThis.fetch): Promise<unknown> {
+  signal?: AbortSignal, fetch?: typeof globalThis.fetch, temperature?: number): Promise<unknown> {
   signal?.throwIfAborted();
   const response = await streamSimple(toPiModel(config), normalizeContext({
     messages: [
@@ -52,6 +52,7 @@ export async function requestAssessmentJson(config: ModelConfig, instructions: s
   }), {
     apiKey: config.apiKey,
     reasoning: config.reasoning,
+    temperature,
     signal,
     fetch,
     maxRetries: 0,

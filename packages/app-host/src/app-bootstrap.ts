@@ -12,6 +12,7 @@ import {
 import { restoreGateFor, type RestoreGate } from "./restore-gate.js";
 import { BackupRestoreService } from "./backup-restore.js";
 import type { BackupDigest } from "./backup-format.js";
+import { ReviewReminderService, type NotificationSchedulerPort } from "./reminders.js";
 export { ModelSettingsError, type PublicModelSettings } from "./model-settings.js";
 
 export interface BootstrapSnapshot {
@@ -33,6 +34,7 @@ function probeFailure(runtimeError: string | undefined): string {
 
 export class AppBootstrapService {
   private mastery?: MasterySessionService;
+  private reminders?: ReviewReminderService;
   private readonly restoreGate: RestoreGate;
   constructor(
     private readonly store: AppStore,
@@ -45,7 +47,12 @@ export class AppBootstrapService {
   }
 
   createBackupRestoreService(appVersion: string, sha256: BackupDigest, clock = systemClock): BackupRestoreService {
-    return new BackupRestoreService(this.store, this.secrets, { appVersion, sha256, clock, makeId: this.transport.makeId });
+    return new BackupRestoreService(this.store, this.secrets, { appVersion, sha256, clock, makeId: this.transport.makeId },
+      () => this.reminders?.afterLearningChange(false));
+  }
+
+  createReviewReminderService(platform: NotificationSchedulerPort, clock = systemClock): ReviewReminderService {
+    return this.reminders ??= new ReviewReminderService(this.store, clock, platform);
   }
 
   async snapshot(): Promise<BootstrapSnapshot> {
@@ -99,7 +106,8 @@ export class AppBootstrapService {
 
   createMasterySessionService(clock = systemClock): MasterySessionService {
     return this.mastery ??= new MasterySessionService(
-      this.store, clock, this.transport.makeId, () => this.getModelConfig(), this.transport.fetch,
+      this.store, clock, this.transport.makeId, () => this.getModelConfig(), this.transport.fetch, this.restoreGate,
+      (requestPermission) => this.reminders?.afterLearningChange(requestPermission),
     );
   }
 

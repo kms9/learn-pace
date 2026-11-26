@@ -1,4 +1,4 @@
-import { useRef, useState, type ComponentRef, type ReactNode } from "react";
+import { useRef, useState, type ComponentRef, type ReactNode, type Ref } from "react";
 import { KeyboardAvoidingView, Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View, type NativeScrollEvent, type NativeSyntheticEvent } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { colors, radius, spacing, typography } from "../theme";
@@ -76,7 +76,7 @@ export function ChatSearch({ label, value, change }: { label: string; value: str
 }
 
 export function ConversationComposer({ label, placeholder, testID, draft, onChangeText, editable = true,
-  send, sendDisabled, stop, model, openModelSettings, children }: {
+  send, sendDisabled, stop, model, openModelSettings, children, action, inputRef }: {
   label: string;
   placeholder: string;
   testID: string;
@@ -89,12 +89,14 @@ export function ConversationComposer({ label, placeholder, testID, draft, onChan
   model?: string;
   openModelSettings?: () => void;
   children?: ReactNode;
+  action?: ReactNode;
+  inputRef?: Ref<ComponentRef<typeof TextInput>>;
 }) {
   const modelName = model ? <Text style={styles.modelName} numberOfLines={1}>{model}</Text> : null;
   return (
     <View style={styles.composer}>
       {children}
-      <TextInput accessibilityLabel={label} testID={testID} placeholder={placeholder} placeholderTextColor={colors.muted}
+      <TextInput ref={inputRef} accessibilityLabel={label} testID={testID} placeholder={placeholder} placeholderTextColor={colors.muted}
         value={draft} onChangeText={onChangeText} editable={editable} multiline style={styles.input} />
       <View style={styles.composerActions}>
         <View style={styles.model}>
@@ -105,6 +107,7 @@ export function ConversationComposer({ label, placeholder, testID, draft, onChan
             </Pressable>
           ) : modelName}
         </View>
+        {action}
         <Pressable accessibilityRole="button" accessibilityLabel={stop ? "停止生成" : "发送"}
           accessibilityState={{ disabled: !stop && sendDisabled }} disabled={!stop && sendDisabled}
           onPress={stop ?? send} style={({ pressed }) => [styles.send, !stop && sendDisabled && styles.disabled, pressed && styles.pressed]}>

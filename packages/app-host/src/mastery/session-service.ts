@@ -6,6 +6,7 @@ import {
 } from "@learn-pace/domain";
 import type { AppStore, Clock, StoredInteraction, StoredMessage, StoredSession } from "@learn-pace/infra";
 import { PiDurableRuntime, type ModelConfig } from "@learn-pace/runtime";
+import { materialChatMessage } from "../chat-quick-check.js";
 import { ChatTurnError, ChatTurns, limitText, type MessageObserver, type PrepareTurn } from "../chat-turns.js";
 import { readLearningRecords } from "../learning-home.js";
 import { restoreGateFor } from "../restore-gate.js";
@@ -54,10 +55,10 @@ export class MasterySessionService {
 
   constructor(private readonly store: AppStore, private readonly clock: Clock, private readonly makeId: () => string,
     getModelConfig: () => Promise<ModelConfig | null>, private readonly fetch?: typeof globalThis.fetch,
-    private readonly restoreGate = restoreGateFor(store)) {
+    private readonly restoreGate = restoreGateFor(store), private readonly reviewChanged?: (requestPermission: boolean) => void) {
     this.turns = new ChatTurns(store, clock, makeId, getModelConfig, restoreGate);
     this.study = new StudyInteractions(store, () => this.clock.nowSeconds(), makeId,
-      (id) => this.requirePath(id), (progress) => this.persist(progress), fetch);
+      (id) => this.requirePath(id), (progress) => this.persist(progress), fetch, reviewChanged);
   }
 
   async createTopic(input: { goal: string; emoji?: string; materials?: readonly TopicMaterial[] }) {
@@ -93,7 +94,7 @@ export class MasterySessionService {
   async listMaterialMessages(sessionId: string) {
     await this.requireSourceSession(sessionId);
     return (await this.store.listMessages(sessionId)).filter((message) => message.status === "committed" &&
-      (message.role === "user" || message.role === "assistant") && message.content.trim());
+      (message.role === "user" || message.role === "assistant") && message.content.trim()).map(materialChatMessage);
   }
 
   async readTopic(pathId: string) {
@@ -122,6 +123,7 @@ export class MasterySessionService {
         throw cause;
       }
       await this.persist(next);
+      this.reviewChanged?.(false);
     });
   }
 
@@ -132,6 +134,7 @@ export class MasterySessionService {
       const progress = await this.requirePath(pathId);
       schedulerForProgress(progress).setDesiredRetention(progress, target, this.clock.nowSeconds());
       await this.persist(progress);
+      this.reviewChanged?.(false);
     });
   }
 
@@ -153,6 +156,7 @@ export class MasterySessionService {
         }
       });
       this.clearPreviews(pathId);
+      this.reviewChanged?.(false);
     });
   }
 
@@ -164,8 +168,10 @@ export class MasterySessionService {
         await tx.deleteSessionsByPath(pathId, "mastery");
         await tx.delete(pathId);
         await tx.deleteDomainEventsByPath(pathId);
+        await tx.detachKnowledgeCardsByPath(pathId, this.clock.nowSeconds());
       });
       this.clearPreviews(pathId);
+      this.reviewChanged?.(false);
     });
   }
 
@@ -223,6 +229,21 @@ export class MasterySessionService {
       });
       const opening = this.sendOpening(session, message);
       return { session, opening };
+    });
+  }
+
+  async startObjectivePractice(pathId: string, objectiveId: string) {
+    return this.restoreGate.write(async () => {
+      const { session, message } = await this.withPath(pathId, "", async () => {
+        const progress = await this.requirePath(pathId);
+        const objective = findKnowledgePoint(progress, objectiveId).kp;
+        if (!objective) throw new ChatTurnError("找不到该知识点");
+        const mode = isMastered(progress, objective) ? "review" : "study";
+        this.assertAdmission(mode, progress);
+        return { session: await this.insertSession(progress, mode), message: mode === "review"
+          ? reviewOpeningMessage([objective.name]) : `我想重练「${objective.name}」。请带我针对这个知识点做一道练习。` };
+      });
+      return { session, opening: this.sendOpening(session, message) };
     });
   }
 
@@ -391,6 +412,7 @@ export class MasterySessionService {
       if (!point) throw new ChatTurnError("找不到该知识点");
       if (mastered && isAssessedMastered(progress, point)) throw new ChatTurnError("该知识点已通过测评");
       await this.persist(setLearnerMasteryOverride(progress, pointId, mastered, note, this.clock.nowSeconds()));
+      this.reviewChanged?.(mastered);
     });
   }
 
@@ -473,6 +495,7 @@ export class MasterySessionService {
         session_id: outline.sessionId, turn_id: outline.turnId, event_type: "OutlineCommitted", created_at: now,
         payload: { version: progress.version + 1, abandoned_interaction_ids: abandoned } });
     });
+    if (outline) this.reviewChanged?.(false);
   }
 
   private clearPreviews(pathId: string) {

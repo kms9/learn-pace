@@ -58,7 +58,7 @@ export function interruptedReplies(session: StoredSession, messages: readonly St
   return repairs;
 }
 
-function boundedHistory(messages: readonly StoredMessage[]): History {
+export function boundedHistory(messages: readonly StoredMessage[], perMessage = Infinity): History {
   const users = new Map(messages.filter(({ role, status }) => role === "user" && status === "committed")
     .map((message) => [message.message_id, message]));
   const history: History[number][] = [];
@@ -68,11 +68,12 @@ function boundedHistory(messages: readonly StoredMessage[]): History {
     if (reply.role !== "assistant" || reply.status !== "committed") continue;
     const user = users.get(sourceId(reply) ?? "");
     if (!user) continue;
-    const question = promptWithQuotes(user);
-    const size = Array.from(question).length + Array.from(reply.content).length;
+    const question = limitText(promptWithQuotes(user), perMessage);
+    const answer = limitText(reply.content, perMessage);
+    const size = Array.from(question).length + Array.from(answer).length;
     if (size > budget) break;
     budget -= size;
-    history.unshift({ role: "user", content: question }, { role: "assistant", content: reply.content });
+    history.unshift({ role: "user", content: question }, { role: "assistant", content: answer });
   }
   return history;
 }
@@ -195,7 +196,7 @@ export class ChatTurns {
     const allowed = action === "retry"
       ? reply.status === "interrupted" || reply.status === "failed"
       : reply.status === "committed" && messages.filter(
-          ({ role, status }) => role === "assistant" && status === "committed",
+          ({ role, status, metadata }) => role === "assistant" && status === "committed" && metadata?.quick_check === undefined,
         ).at(-1)?.message_id === replyId;
     if (!allowed) throw new ChatTurnError("此回复无法执行该操作");
     const config = await this.requireModel();
@@ -205,7 +206,7 @@ export class ChatTurns {
     }, boundedHistory(messages.slice(0, userIndex)), prepare, signal, onMessage);
   }
 
-  private async requireModel(): Promise<ModelConfig> {
+  async requireModel(): Promise<ModelConfig> {
     const config = await this.getModelConfig().catch(() => null);
     if (!config) throw new ChatTurnError("请先在「我的」中配置 DeepSeek Flash");
     return config;
@@ -297,7 +298,7 @@ export class ChatTurns {
     return terminal;
   }
 
-  private publish(message: StoredMessage, observer?: MessageObserver): void {
+  publish(message: StoredMessage, observer?: MessageObserver): void {
     observer?.(message);
     for (const notify of this.observers.get(message.session_id) ?? []) notify(message);
   }

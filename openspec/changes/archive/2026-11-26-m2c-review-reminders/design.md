@@ -49,7 +49,7 @@
   - `resolveNotificationTarget()`：供点通知后调用——先检查 `restoreGate` 未处于恢复中，实时查询所有路径的 `dueReviews`：
     - `duePaths.length === 0` → `{ kind: "home", notice: "当前暂无到期复习" }`；
     - `duePaths.length > 1` → `{ kind: "home" }`；
-    - `duePaths.length === 1` → 检查该路径是否已有未结束（或最新且处于 `review` 模式且非空/待答题）的复习会话，有则 `{ kind: "session", pathId, sessionId }`，无则 `{ kind: "new_review", pathId }`。
+    - `duePaths.length === 1` → 优先恢复同路径仍有待答题卡的复习会话，其次恢复最近的 `review` 会话。刚建好但尚未发送开场的复习会话也可恢复，避免通知处理期间强停后重复创建。有可恢复会话时返回 `{ kind: "session", pathId, sessionId }`，否则返回 `{ kind: "new_review", pathId }`。
 
 ### 3. Android 通知渠道、深链与防重入（`apps/mobile`）
 - 引入 `expo-notifications`（`58.1.7`），在 `app.json` 配置图标/通道并创建 Android 通道 `review-reminders`（重要级别 `DEFAULT`）。

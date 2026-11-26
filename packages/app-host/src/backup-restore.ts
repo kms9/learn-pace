@@ -24,7 +24,8 @@ function portableSettings(settings: DatabaseSnapshot["settings"]): DatabaseSnaps
 }
 
 export class BackupRestoreService {
-  constructor(private readonly store: AppStore, private readonly secrets: SecretStore, private readonly environment: BackupEnvironment) {}
+  constructor(private readonly store: AppStore, private readonly secrets: SecretStore, private readonly environment: BackupEnvironment,
+    private readonly afterRestore?: () => void) {}
 
   async exportBackup(): Promise<BackupEnvelope> {
     const snapshot = await this.store.exportSnapshot();
@@ -44,7 +45,7 @@ export class BackupRestoreService {
   }
 
   async restoreBackup(raw: string): Promise<void> {
-    return restoreGateFor(this.store).restore(async () => {
+    await restoreGateFor(this.store).restore(async () => {
       try {
         await this.store.runInTransaction(async (tx) => {
           const { payload } = await readBackup(raw, this.environment.sha256);
@@ -59,6 +60,7 @@ export class BackupRestoreService {
         throw new BackupError("恢复失败，原有本地数据已保留。");
       }
     });
+    this.afterRestore?.();
   }
 
   private async restoreSettings(tx: AppStore, source: DatabaseSnapshot["settings"]): Promise<DatabaseSnapshot["settings"]> {

@@ -7,12 +7,12 @@
 ## Requirements
 
 ### Requirement: SQLite WAL mode and versioned schema migration
-The local database `learn-pace.db` SHALL open in SQLite WAL journal mode and MUST initialize or upgrade its schema idempotently to version 5 (`learning_progress.version`, unique non-null `interactions.submission_id`, and `domain_events`) without losing previously stored M1 or M2-A records.
+本地数据库 `learn-pace.db` SHALL 使用 SQLite WAL 日志模式，MUST 幂等初始化或升级到版本 6。升级在原子事务中添加支持软删除的 `knowledge_cards`，保留 M1、M2-A 和 M2-B 既有数据。
 
 #### Scenario: Opening a fresh database
 - **WHEN** 应用首次打开空的 `learn-pace.db`
-- **THEN** 数据库启用 `WAL` 日志模式并创建 `settings`、`learning_progress`（含 `version`）、`interactions`（含 `submission_id` 唯一索引）、`sessions`、`messages`、`session_threads` 与 `domain_events` 表及必要索引
-- **AND** 记录最新 Schema 版本号（v5）
+- **THEN** 数据库启用 `WAL` 日志模式并创建 `settings`、`learning_progress`（含 `version`）、`interactions`（含 `submission_id` 唯一索引）、`sessions`、`messages`、`session_threads`、`domain_events` 与 `knowledge_cards` 表及必要索引
+- **AND** 记录最新 Schema 版本号（v6）
 
 #### Scenario: Upgrading an existing M1 database
 - **WHEN** 应用打开已包含 M1 `learning_progress`、`interactions`、`settings` 数据的既有 `learn-pace.db`
@@ -22,8 +22,12 @@ The local database `learn-pace.db` SHALL open in SQLite WAL journal mode and MUS
 - **WHEN** 应用打开已包含 M2-A v4 路径、会话、消息、侧聊与题卡数据的 `learn-pace.db`
 - **THEN** 迁移流程从 `progress` JSON 回填 `learning_progress.version`，补齐 `domain_events` 表与 `submission_id` 唯一索引，既有数据完整可读
 
+#### Scenario: Upgrading an existing M2-B v5 database to v6 with rollback on failure
+- **WHEN** 应用打开 M2-B v5 数据库升级至 v6，或在迁移中途注入故障
+- **THEN** 正常升级后 `knowledge_cards` 就绪且全部 v5 数据完整可读；若迁移失败则事务完整回滚，库版本与原数据保持 v5 不变
+
 ### Requirement: Sequential persistence repositories for core M2-A entities
-The storage layer SHALL expose pure-TypeScript repository contracts and both in-memory and Expo SQLite implementations for settings, learning paths, interactions, chat sessions, messages, Little Tutor threads, and domain events, supporting both direct operations and atomic short transactions (`runInTransaction`) with CAS-guarded progress saves (`saveWithCas`), and serializing all writes so that a transaction on a separate connection never causes concurrent writes to fail with a lock error.
+存储层 SHALL 为设置、学习路径、交互（含已判分查询）、会话、消息、小老师、领域事件和知识卡提供纯 TypeScript 仓储契约及内存、Expo SQLite 实现，支持原子短事务 `runInTransaction`、CAS 保存 `saveWithCas` 以及跨连接串行写入。
 
 #### Scenario: Persisting and reloading sessions, messages, and threads
 - **WHEN** 调用方通过 Repository 写入一条会话、关联消息以及锚定到指定消息的小老师侧聊后重新读取
@@ -40,6 +44,10 @@ The storage layer SHALL expose pure-TypeScript repository contracts and both in-
 #### Scenario: Atomic transaction rolls back on failure
 - **WHEN** 调用方在 `runInTransaction` 中先写入更新后的路径进度，随后在更新题卡前抛出错误
 - **THEN** 内存实现与 SQLite 实现均完整回滚该事务，路径进度与题卡保持事务开始前的原状
+
+#### Scenario: Listing graded interactions and managing knowledge cards
+- **WHEN** 调用方查询所有已批改题卡，或写入、更新、搜索、软删除与解绑知识卡
+- **THEN** 内存实现与 SQLite 实现返回一致的已批改题卡与知识卡记录
 
 ### Requirement: Persistence survives application process termination
 Data written through the SQLite store SHALL remain intact after the Android application process is force-stopped and relaunched.
