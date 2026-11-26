@@ -10,6 +10,7 @@ export class ChatTurnError extends Error {}
 
 export type History = NonNullable<RuntimeTurnRequest["history"]>;
 export type MessageObserver = (message: StoredMessage) => void;
+export type ToolActivity = { toolName: string; callId: string; phase: "started" | "finished" };
 
 export function limitText(text: string, limit: number): string {
   if (text.length <= limit) return text;
@@ -19,6 +20,10 @@ export function limitText(text: string, limit: number): string {
     end += char.length;
   }
   return text.slice(0, end);
+}
+
+export function chatTitleFromPrompt(content: string): string {
+  return limitText(content.trim().replace(/\s+/g, " "), 36);
 }
 
 export function messageQuotes(message: StoredMessage): ChatQuote[] {
@@ -87,6 +92,7 @@ export type PrepareTurn = (session: StoredSession, config: ModelConfig, context:
   options?: Pick<RuntimeTurnRequest, "instructions" | "mode" | "pathId" | "maxTurns" | "onModelRound">;
   allowedTools?: readonly string[];
   toolSettled?: () => void;
+  onToolActivity?: (activity: ToolActivity | null) => void;
   replyMetadata?: () => Record<string, unknown> | undefined;
   measure?: boolean;
 }>;
@@ -220,7 +226,7 @@ export class ChatTurns {
     await this.store.saveSession({
       ...session,
       title: session.kind === "lf01" && session.model_id === null
-        ? limitText(user.content.trim().replace(/\s+/g, " "), 36)
+        ? chatTitleFromPrompt(user.content)
         : session.title,
       model_id: requestModelId(config),
       updated_at: this.clock.nowSeconds(),
@@ -229,7 +235,7 @@ export class ChatTurns {
     let content = "";
     const prepared = await prepare(session, config, { user, turnId: reply.turn_id!, signal, deliveredText: () => content })
       .catch(() => undefined);
-    const { runtime, options, allowedTools = [], toolSettled, replyMetadata, measure } = prepared ?? {};
+    const { runtime, options, allowedTools = [], toolSettled, onToolActivity, replyMetadata, measure } = prepared ?? {};
     const started = performance.now();
     let ttft: number | null = null;
     const rounds: { input: number | null; output: number | null }[] = [];
@@ -246,6 +252,9 @@ export class ChatTurns {
       } }),
     }, (event) => {
       if (measure && (event.type === "text_delta" || event.type === "tool_call")) ttft ??= Math.round(performance.now() - started);
+      if (event.type === "tool_call" || event.type === "tool_result") {
+        onToolActivity?.({ toolName: event.toolName, callId: event.callId, phase: event.type === "tool_call" ? "started" : "finished" });
+      }
       if (event.type === "text_delta") {
         content += event.delta;
         const partial = { ...reply, content };
@@ -270,7 +279,7 @@ export class ChatTurns {
         }
         toolSettled?.();
       }
-    }).catch(() => {});
+    }).catch(() => {}).finally(() => onToolActivity?.(null));
     await writes;
     const terminal: StoredMessage = {
       ...reply, content, status,

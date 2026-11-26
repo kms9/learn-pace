@@ -1,9 +1,11 @@
 import { MasterySessionError, type TopicMaterial } from "@learn-pace/app-host";
 import type { StoredMessage, StoredSession } from "@learn-pace/infra";
 import { useLocalSearchParams, useRouter } from "expo-router";
-import { useEffect, useRef, useState } from "react";
-import { Keyboard, Pressable, StyleSheet, Text, TextInput, View } from "react-native";
+import { useHeaderHeight } from "expo-router/react-navigation";
+import { useEffect, useRef, useState, type ComponentRef } from "react";
+import { Keyboard, KeyboardAvoidingView, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
 import { Action, Card, LoadingCard, ModelSetup, Page, RetryCard, styles } from "../../src/components/Shell";
+import { ChatSearch } from "../../src/components/chat-controls";
 import { useApp } from "../../src/context/AppContext";
 import { colors, spacing } from "../../src/theme";
 
@@ -15,6 +17,7 @@ export default function NewMasteryTopic() {
   }>();
   const { mastery, snapshot } = useApp();
   const router = useRouter();
+  const headerHeight = useHeaderHeight();
   const [step, setStep] = useState(1);
   const [goal, setGoal] = useState("");
   const [emoji, setEmoji] = useState(emojis[0]!);
@@ -24,6 +27,8 @@ export default function NewMasteryTopic() {
       material: { kind: "chat", sessionId: sourceSessionId, messageId: sourceMessageId, excerpt: sourceExcerpt },
     }] : []);
   const [sessions, setSessions] = useState<StoredSession[]>();
+  const [query, setQuery] = useState("");
+  const [showAllSessions, setShowAllSessions] = useState(false);
   const [expanded, setExpanded] = useState<string>();
   const [messages, setMessages] = useState<StoredMessage[]>();
   const [note, setNote] = useState("");
@@ -35,6 +40,13 @@ export default function NewMasteryTopic() {
   const [busy, setBusy] = useState(false);
   const working = useRef(false);
   const noteId = useRef(0);
+  const scroll = useRef<ComponentRef<typeof ScrollView>>(null);
+  const search = query.trim().toLocaleLowerCase();
+  const recentLimit = 4;
+  const visibleSessions = search ? sessions?.filter(({ title }) => title.toLocaleLowerCase().includes(search))
+    : showAllSessions ? sessions : sessions?.slice(0, recentLimit);
+
+  useEffect(() => { scroll.current?.scrollTo({ y: 0, animated: false }); }, [step]);
 
   useEffect(() => {
     if (step !== 2) return;
@@ -94,8 +106,24 @@ export default function NewMasteryTopic() {
     }
   }
 
-  return <Page title={step === 1 ? "新建精通目标" : "为目标添加资料"} secondary keyboard>
-    {step === 1 ? <Card title="你想掌握什么？">
+  const footer = <View style={local.footer}>
+    {error && <Text accessibilityRole="alert" style={local.error}>{error}</Text>}
+    <View style={local.footerActions}>
+      {step === 2 && <Action label="返回上一步" onPress={() => { setStep(1); setError(undefined); }} disabled={busy} secondary />}
+      <View style={local.primaryAction}>
+        {step === 1 ? <Action label="下一步" onPress={nextStep} />
+          : <Action label={busy ? "正在创建…" : "和导师一起定大纲"} onPress={() => void submit()} disabled={busy} />}
+      </View>
+    </View>
+  </View>;
+
+  return <KeyboardAvoidingView style={styles.screen} behavior="padding" keyboardVerticalOffset={headerHeight}>
+    <Page title={step === 1 ? "你想掌握什么？" : "添加学习资料"} secondary scrollRef={scroll} footer={footer}>
+    <View accessible accessibilityLabel={`第 ${step} 步，共 2 步。${step === 1 ? "学习目标" : "选择资料"}`} style={local.steps}>
+      <Text style={[local.step, step === 1 && local.activeStep]}>1  学习目标</Text>
+      <Text style={[local.step, step === 2 && local.activeStep]}>2  选择资料</Text>
+    </View>
+    {step === 1 ? <Card>
       <TextInput accessibilityLabel="学习目标" placeholder="例如，学会独立化简分数和比例"
         placeholderTextColor={colors.muted} multiline value={goal} onChangeText={setGoal}
         style={[local.input, local.goal]} testID="mastery-goal" />
@@ -107,7 +135,6 @@ export default function NewMasteryTopic() {
           <Text style={local.iconText}>{icon}</Text>
         </Pressable>)}
       </View>
-      <Action label="下一步" onPress={nextStep} />
     </Card> : <>
       {!!materials.length && <Card title="已选资料">
         {materials.map(({ key, label, material }) => <View key={key} style={local.material}>
@@ -118,11 +145,13 @@ export default function NewMasteryTopic() {
         </View>)}
       </Card>}
       <Card title="问答会话">
+        <ChatSearch label="搜索问答会话" value={query} change={setQuery} />
         {sessionError ? <RetryCard message="无法读取问答会话"
           retry={() => { setSessionError(false); setSessionAttempt((value) => value + 1); }} />
           : !sessions && <LoadingCard label="正在读取问答会话…" />}
         {sessions?.length === 0 && <Text style={styles.body}>没有可添加的问答会话。</Text>}
-        {sessions?.map((session) => <View key={session.session_id} style={local.material}>
+        {search && !!sessions?.length && visibleSessions?.length === 0 && <Text style={styles.body}>未找到匹配的会话。</Text>}
+        {visibleSessions?.map((session) => <View key={session.session_id} style={local.material}>
           <Action label={session.title} onPress={() => {
             setMessages(undefined);
             setMessageError(false);
@@ -144,6 +173,8 @@ export default function NewMasteryTopic() {
             </Pressable>)}
           </>}
         </View>)}
+        {!search && !showAllSessions && (sessions?.length ?? 0) > recentLimit &&
+          <Action label="展开更多会话" onPress={() => setShowAllSessions(true)} secondary />}
       </Card>
       <Card title="文本笔记">
         <TextInput accessibilityLabel="文本笔记" placeholder="输入可选的资料或学习笔记" placeholderTextColor={colors.muted}
@@ -155,14 +186,20 @@ export default function NewMasteryTopic() {
         {!snapshot.model.configured && <Text style={styles.body}>可先创建目标，发送消息前请到「我的」配置模型。</Text>}
       </Card>
       <ModelSetup />
-      <Action label="和导师一起定大纲" onPress={() => void submit()} disabled={busy} />
-      <Action label="返回上一步" onPress={() => { setStep(1); setError(undefined); }} disabled={busy} secondary />
     </>}
-    {error && <Text accessibilityRole="alert" style={local.error}>{error}</Text>}
-  </Page>;
+    </Page>
+  </KeyboardAvoidingView>;
 }
 
 const local = StyleSheet.create({
+  steps: { flexDirection: "row", alignItems: "stretch", gap: spacing.sm },
+  step: { flex: 1, color: colors.muted, borderBottomWidth: 2, borderColor: colors.border,
+    paddingBottom: spacing.sm, fontSize: 14, fontWeight: "600" },
+  activeStep: { color: colors.primary, borderColor: colors.primary },
+  footer: { paddingHorizontal: spacing.md, paddingVertical: spacing.sm, gap: spacing.xs,
+    borderTopWidth: StyleSheet.hairlineWidth, borderColor: colors.border, backgroundColor: colors.background },
+  footerActions: { flexDirection: "row", alignItems: "stretch", gap: spacing.sm },
+  primaryAction: { flex: 1 },
   input: { borderColor: colors.border, borderWidth: 1, borderRadius: 10, color: colors.text,
     padding: spacing.sm, fontSize: 16, textAlignVertical: "top" },
   goal: { minHeight: 96 },

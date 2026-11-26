@@ -70,3 +70,36 @@ The system SHALL let the learner start goal creation from a message, navigating 
 #### Scenario: Starting goal creation from a chat reply
 - **WHEN** 用户在选文确认层点「转为学习目标」
 - **THEN** 应用跳转到 `mastery/new` 并携带三个参数，原会话内容与状态不变
+
+### Requirement: Selection actions on rendered replies
+已完成的助手正文 SHALL 支持通过原生选区直接引用、问 Dito 或转为学习目标。Android SHALL 在选中正文时显示应用操作，兼容只提供标准动作的系统菜单。系统 MUST 核对选文与原始消息的区间。有多处匹配或无法确定原文区间时，系统 SHALL 提示用户在原文中确认选区。
+
+#### Scenario: Selecting a distinct passage
+- **WHEN** 用户在已渲染的回复里选择一段可唯一定位的文字，并点击「添加到对话框」
+- **THEN** 该段原文以引用出现，未发送任何消息
+
+#### Scenario: Confirming an ambiguous selection
+- **WHEN** 同一选文在原文中重复出现，或渲染后的字符无法可靠定位到原文
+- **THEN** 应用打开原文选区供用户确认，直接操作前不会采用任一候选区间
+
+### Requirement: Find and start a chat
+问答 SHALL 支持按标题搜索本地历史会话，搜索结果在键盘展开时仍须可点击，并在打开会话后显示其标题。新对话的空态 SHALL 提供可填入草稿的示例，点击示例 MUST NOT 发送消息或覆盖非空草稿。
+
+#### Scenario: Finding a prior chat
+- **WHEN** 用户按标题中的词搜索并打开结果
+- **THEN** 历史只显示匹配记录，键盘展开时可以直接点选，打开后顶部显示该会话的标题
+
+#### Scenario: Using a starter
+- **WHEN** 用户在空白问答里点击一个起手示例
+- **THEN** 示例进入草稿，可修改后手动发送
+
+### Requirement: Low-emphasis reply actions, full-reply copy, and scroll-to-bottom
+问答与小老师侧聊中，已完成的助手回复 SHALL 使用低权重的次要样式展示「选文」「复制」「重新生成」「删除整轮」等操作。学习者 SHALL 可一键将完整回复原文复制到系统剪贴板，应用短暂显示确认反馈。当学习者上翻长对话并离开最新消息时，应用 SHALL 显示悬浮的「回到底部」按钮。
+
+#### Scenario: Copying an assistant reply
+- **WHEN** 用户点击某条已完成助手回复下方的「复制」操作
+- **THEN** 系统将该条回复原文写入剪贴板，并在该操作上短暂显示「已复制」反馈
+
+#### Scenario: Scrolling up in a long conversation
+- **WHEN** 用户在长对话中向上翻看历史消息，距底部超过阈值
+- **THEN** 界面在输入框上方显示悬浮的「↓ 回到底部」按钮；点击后平滑滚回最新消息并恢复自动跟随

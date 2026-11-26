@@ -1,7 +1,7 @@
 import type { Answers, StudyCard } from "@learn-pace/app-host";
 import type { PublicPendingQuestion } from "@learn-pace/domain";
 import type { QuestionGrade } from "@learn-pace/infra";
-import { useState } from "react";
+import { useEffect, useRef, useState, type ComponentRef } from "react";
 import { Pressable, StyleSheet, Text, TextInput, View } from "react-native";
 import { colors, radius, spacing } from "../../theme";
 import { ChatAction } from "../chat-controls";
@@ -9,8 +9,17 @@ import { MessageContent } from "../MessageContent";
 import { styles } from "../Shell";
 
 const labels = { correct: "正确", partial: "部分正确", incorrect: "还差一点", ungraded: "未评分，掌握状态不变" };
+type AnswerInput = ComponentRef<typeof TextInput>;
 
-export function QuestionCard({ card, disabled, submitting, submit, retry, skip, challenge }: {
+export type AnswerControls = {
+  next?: () => void;
+  finishEditing: () => void;
+  submit: () => void;
+  submitLabel: string;
+  canSubmit: boolean;
+};
+
+export function QuestionCard({ card, disabled, submitting, submit, retry, skip, challenge, onAnswerControls }: {
   card: StudyCard;
   disabled: boolean;
   submitting: boolean;
@@ -18,9 +27,12 @@ export function QuestionCard({ card, disabled, submitting, submit, retry, skip, 
   retry: () => void;
   skip: () => void;
   challenge: () => void;
+  onAnswerControls: (interactionId: string, controls: AnswerControls | null) => void;
 }) {
   const [edits, setEdits] = useState<Answers>({});
   const [free, setFree] = useState<Record<string, boolean>>({});
+  const [focused, setFocused] = useState<string>();
+  const inputs = useRef(new Map<string, AnswerInput>());
   const parts = card.question.questions?.length ? card.question.questions : [card.question];
   const group = card.question.question_type === "group";
   const draft = { ...card.answers, ...edits };
@@ -29,13 +41,45 @@ export function QuestionCard({ card, disabled, submitting, submit, retry, skip, 
   const result = !group ? card.grade?.questions[card.question.question_id] : undefined;
   const border = result?.voided || !result?.final ? colors.border :
     result.result === "correct" ? colors.success : result.result === "incorrect" ? colors.danger : colors.primary;
+  const submitLabel = group ? "提交整组作答" : "提交作答";
+  const canSubmit = editable && complete;
+  const focusedIndex = parts.findIndex(({ question_id }) => question_id === focused);
+  const nextInput = parts.slice(focusedIndex + 1).find((question) => {
+    const id = question.question_id;
+    const grade = card.grade?.questions[id];
+    return !grade?.final && !grade?.voided && (question.question_type !== "choice" ||
+      (free[id] ?? Boolean(draft[id] && !question.options.some(({ label }) => label === draft[id]))));
+  })?.question_id;
+
+  function submitDraft() {
+    if (!canSubmit) return;
+    submit(Object.fromEntries(parts.filter(({ question_id }) => !card.grade?.questions[question_id]?.final &&
+      !card.grade?.questions[question_id]?.voided).map(({ question_id }) => [question_id, draft[question_id] ?? ""])));
+  }
+  const latestSubmit = useRef(submitDraft);
+  latestSubmit.current = submitDraft;
+
+  useEffect(() => {
+    if (!focused || !editable) return;
+    onAnswerControls(card.interaction_id, {
+      next: nextInput ? () => inputs.current.get(nextInput)?.focus() : undefined,
+      finishEditing: () => {
+        inputs.current.get(focused)?.blur();
+        setFocused(undefined);
+      },
+      submit: () => latestSubmit.current(),
+      submitLabel,
+      canSubmit,
+    });
+    return () => onAnswerControls(card.interaction_id, null);
+  }, [canSubmit, card.interaction_id, editable, focused, nextInput, onAnswerControls, submitLabel]);
 
   function change(id: string, answer: string) {
     setEdits((current) => ({ ...current, [id]: answer }));
   }
 
   return <View style={[local.card, { borderColor: border }]} testID="mastery-question-card">
-    <Text accessibilityRole="header" style={styles.heading}>{group ? "题组" : "题卡"}</Text>
+    <Text accessibilityRole="header" style={local.caption}>{group ? "题组" : "题卡"}</Text>
     {group && <MessageContent content={card.question.prompt} />}
     {parts.map((question, index) => {
       const id = question.question_id;
@@ -47,6 +91,8 @@ export function QuestionCard({ card, disabled, submitting, submit, retry, skip, 
         {group && <Text style={styles.body}>{`第 ${index + 1} 题`}</Text>}
         <MessageContent content={question.prompt} />
         <QuestionInput question={question} value={value} grade={part} canEdit={canEdit} asText={asText}
+          inputRef={(view) => { if (view) inputs.current.set(id, view); else inputs.current.delete(id); }}
+          focus={() => setFocused(id)} blur={() => setFocused((current) => current === id ? undefined : current)}
           onChange={(answer) => change(id, answer)} toggle={() => {
             setFree((current) => ({ ...current, [id]: !asText }));
             change(id, "");
@@ -55,10 +101,8 @@ export function QuestionCard({ card, disabled, submitting, submit, retry, skip, 
       </View>;
     })}
     {card.status === "awaiting_input" && <View style={local.actions}>
-      <ChatAction label={group ? "提交整组作答" : "提交作答"} primary disabled={!editable || !complete}
-        onPress={() => submit(Object.fromEntries(parts.filter(({ question_id }) => !card.grade?.questions[question_id]?.final &&
-          !card.grade?.questions[question_id]?.voided).map(({ question_id }) => [question_id, draft[question_id] ?? ""])))} />
       <ChatAction label="跳过" disabled={!editable} onPress={skip} />
+      <ChatAction label={submitLabel} primary disabled={!canSubmit} onPress={submitDraft} />
     </View>}
     {card.status === "answered" && <>
       <Text accessibilityLiveRegion="polite" style={styles.body}>
@@ -76,7 +120,7 @@ export function QuestionCard({ card, disabled, submitting, submit, retry, skip, 
   </View>;
 }
 
-function QuestionInput({ question, value, grade, canEdit, asText, onChange, toggle }: {
+function QuestionInput({ question, value, grade, canEdit, asText, onChange, toggle, inputRef, focus, blur }: {
   question: PublicPendingQuestion;
   value: string;
   grade?: QuestionGrade;
@@ -84,22 +128,31 @@ function QuestionInput({ question, value, grade, canEdit, asText, onChange, togg
   asText: boolean;
   onChange: (answer: string) => void;
   toggle: () => void;
+  inputRef: (view: AnswerInput | null) => void;
+  focus: () => void;
+  blur: () => void;
 }) {
   const choice = question.question_type === "choice";
   return <>
     {choice && (!asText || grade?.final) && question.options.map(({ id, label, body }) => {
+      const selected = value === label;
       const correct = grade?.final && grade.result !== "correct" && grade.correct_option === label;
       return <Pressable key={id} accessibilityRole="radio" accessibilityLabel={label + "．" + body}
-        accessibilityState={{ selected: value === label, disabled: !canEdit }} disabled={!canEdit}
-        onPress={() => onChange(label)} style={[local.option, value === label && local.selected, correct && local.correct]}>
-        <Text style={local.optionLabel}>{label}</Text>
-        <View style={local.optionText}><MessageContent content={body} /></View>
-        {correct && <Text style={local.correctText}>正确选项</Text>}
+        accessibilityState={{ checked: selected, disabled: !canEdit }} disabled={!canEdit}
+        onPress={() => onChange(label)} style={[local.option, selected && local.selected, correct && local.correct]}>
+        <View style={[local.optionBadge, selected && local.selectedBadge]}>
+          <Text style={[local.optionLabel, selected && local.selectedLabel]}>{label}</Text>
+        </View>
+        <View style={local.optionText}>
+          <MessageContent content={body} />
+          {correct && <Text style={local.correctText}>正确选项</Text>}
+        </View>
       </Pressable>;
     })}
     {canEdit && choice && <ChatAction label={asText ? "返回选项" : "用我自己的话回答"} onPress={toggle} />}
-    {canEdit && (!choice || asText) && <TextInput accessibilityLabel="题卡作答" placeholder="输入答案"
-      placeholderTextColor={colors.muted} style={local.input} multiline value={value} onChangeText={onChange} />}
+    {canEdit && (!choice || asText) && <TextInput ref={inputRef} accessibilityLabel="题卡作答" placeholder="输入答案"
+      placeholderTextColor={colors.muted} style={local.input} multiline value={value} onChangeText={onChange}
+      onFocus={focus} onBlur={blur} />}
     {!canEdit && value && (!choice || asText) && <Text selectable style={styles.body}>{value}</Text>}
   </>;
 }
@@ -118,13 +171,18 @@ function Grade({ grade }: { grade: QuestionGrade }) {
 }
 
 const local = StyleSheet.create({
-  card: { backgroundColor: colors.surface, borderWidth: 1, borderRadius: radius.card, padding: spacing.md, gap: spacing.sm },
+  card: { backgroundColor: colors.surface, borderLeftWidth: 3, borderRadius: radius.card, padding: spacing.md, gap: spacing.sm },
+  caption: { color: colors.muted, fontSize: 13, fontWeight: "600" },
   part: { gap: spacing.xs },
-  actions: { flexDirection: "row", flexWrap: "wrap", alignItems: "center", gap: spacing.sm },
+  actions: { flexDirection: "row", flexWrap: "wrap", justifyContent: "flex-end", alignItems: "center", gap: spacing.sm },
   option: { flexDirection: "row", alignItems: "center", minHeight: 44, gap: spacing.sm,
     borderWidth: 1, borderColor: colors.border, padding: spacing.sm, borderRadius: 10 },
-  optionLabel: { color: colors.primary, fontWeight: "700", minWidth: 20 },
-  optionText: { flex: 1 },
+  optionBadge: { minWidth: 30, minHeight: 30, borderRadius: 15, paddingHorizontal: spacing.xs,
+    borderColor: colors.border, borderWidth: 1, alignItems: "center", justifyContent: "center" },
+  selectedBadge: { backgroundColor: colors.primary, borderColor: colors.primary },
+  optionLabel: { color: colors.text, fontSize: 14, fontWeight: "700" },
+  selectedLabel: { color: colors.surface },
+  optionText: { flex: 1, minWidth: 0, gap: spacing.xs },
   selected: { backgroundColor: colors.soft, borderColor: colors.primary },
   correct: { borderColor: colors.success },
   correctText: { color: colors.success, fontWeight: "700" },

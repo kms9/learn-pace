@@ -43,7 +43,6 @@ export default function LittleTutor() {
             key={thread.session.session_id}
             sessionId={thread.session.session_id}
             initialMessages={thread.messages}
-            initialDraft={thread.messages.length ? "" : thread.thread.selected_text}
             intro={(
               <View style={styles.selection}>
                 <Text style={styles.heading}>选中内容</Text>
@@ -60,7 +59,8 @@ export default function LittleTutor() {
 const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: colors.background },
   loading: { flex: 1, alignItems: "center", justifyContent: "center", padding: spacing.md },
-  selection: { padding: spacing.md, borderRadius: radius.card, backgroundColor: colors.soft, gap: spacing.xs },
+  selection: { padding: spacing.md, borderRadius: radius.card, backgroundColor: colors.soft,
+    borderLeftWidth: 2, borderLeftColor: colors.primary, gap: spacing.xs },
   heading: { color: colors.muted, fontSize: 13, fontWeight: "600" },
   excerpt: { color: colors.text, fontSize: 15, lineHeight: 23 },
 });

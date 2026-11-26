@@ -3,19 +3,29 @@ import type { ComponentRef, ReactNode, Ref } from "react";
 import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useApp } from "../context/AppContext";
-import { colors, radius, spacing } from "../theme";
+import { colors, radius, spacing, typography } from "../theme";
 
-export function Page({ title, children, secondary = false, keyboard = false, scrollRef }: {
+export function Page({ title, children, secondary = false, keyboard = false, scrollRef, footer, headerAction }: {
   title: string; children: ReactNode; secondary?: boolean; keyboard?: boolean; scrollRef?: Ref<ComponentRef<typeof ScrollView>>;
+  footer?: ReactNode; headerAction?: ReactNode;
 }) {
   return (
     <SafeAreaView style={styles.screen} edges={secondary ? ["left", "right", "bottom"] : ["top", "left", "right"]}>
+      {headerAction && <View style={styles.header}>
+        <Text accessibilityRole="header" style={[styles.title, styles.headerTitle]}>{title}</Text>
+        {headerAction}
+      </View>}
       <ScrollView ref={scrollRef} contentContainerStyle={styles.page} keyboardShouldPersistTaps="handled" automaticallyAdjustKeyboardInsets={keyboard}>
-        <Text accessibilityRole="header" style={styles.title}>{title}</Text>
+        {!headerAction && <Text accessibilityRole="header" style={styles.title}>{title}</Text>}
         {children}
       </ScrollView>
+      {footer}
     </SafeAreaView>
   );
+}
+
+export function StatusBadge({ label, tone = "primary" }: { label: string; tone?: "primary" | "warning" }) {
+  return <Text style={[styles.badge, tone === "warning" && styles.warningBadge]}>{label}</Text>;
 }
 
 export function Card({ title, children }: { title?: string; children?: ReactNode }) {
@@ -69,10 +79,15 @@ export function RetryCard({ message, retry }: { message: string; retry: () => vo
 export const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: colors.background },
   page: { flexGrow: 1, padding: spacing.md, gap: spacing.md },
-  title: { color: colors.text, fontSize: 27, fontWeight: "700", marginBottom: spacing.xs },
-  heading: { color: colors.text, fontSize: 17, fontWeight: "700" },
+  header: { flexDirection: "row", alignItems: "center", gap: spacing.sm, paddingHorizontal: spacing.md, paddingTop: spacing.sm },
+  headerTitle: { flex: 1, marginBottom: 0 },
+  title: { color: colors.text, fontSize: typography.pageTitle, fontWeight: "700", marginBottom: spacing.xs },
+  heading: { color: colors.text, fontSize: typography.sectionTitle, fontWeight: "700" },
   card: { padding: spacing.md, borderWidth: 1, borderColor: colors.border, backgroundColor: colors.surface, borderRadius: radius.card, gap: spacing.sm },
-  body: { color: colors.muted, fontSize: 15, lineHeight: 22 },
+  body: { color: colors.muted, fontSize: typography.body, lineHeight: 22 },
+  badge: { alignSelf: "flex-start", color: colors.primary, backgroundColor: colors.primarySoft,
+    borderRadius: radius.sm, paddingHorizontal: spacing.sm, paddingVertical: 3, fontSize: typography.caption, fontWeight: "600", overflow: "hidden" },
+  warningBadge: { color: colors.warning, backgroundColor: colors.warningSoft },
   action: { minHeight: 44, padding: spacing.sm, alignItems: "center", justifyContent: "center", borderRadius: 9, backgroundColor: colors.primary },
   actionLabel: { color: colors.surface, fontSize: 15, fontWeight: "600" },
   secondaryAction: { backgroundColor: colors.soft },

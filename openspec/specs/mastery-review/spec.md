@@ -18,10 +18,10 @@ In review mode, `mastery_quiz` and `mastery_assess` SHALL accept only objectives
 - **THEN** 导师可以对任意已掌握知识点出题
 
 ### Requirement: Review entry points and opening message
-The system SHALL start a new review-mode session from the Mastery Path tab's due banner, the path page's 「开始本次复习」, and each review plan item, and SHALL send DeepTutor's opening message listing the due items, or 「我们来复习一下我已经学过的内容。」 when none are due.
+学习者点击「精通之路」列表中某条路径的到期复习入口、路径页的「开始本次复习」或复习计划条目时，系统 SHALL 新建复习模式会话，并发送列出本次到期项的开场消息；本次没有到期项时 SHALL 发送「我们来复习一下我已经学过的内容。」。
 
-#### Scenario: Starting review from the due banner
-- **WHEN** 有两个知识点到期，用户点「精通之路」列表顶部的到期横幅
+#### Scenario: Starting review from a path's due action
+- **WHEN** 一条路径有两个知识点到期，用户点「精通之路」列表中该路径的到期复习入口
 - **THEN** 应用新建复习模式会话并发送「我们来复习今天到期的这几项：A、B。」
 
 ### Requirement: In-session review summary
@@ -58,4 +58,11 @@ Debug builds SHALL offer an in-memory clock offset in days that all mastery scre
 
 #### Scenario: Making an item due on a device
 - **WHEN** 开发者在调试构建中把时钟偏移设为 4 天
-- **THEN** 复习计划与到期横幅按偏移后的时间显示到期项
+- **THEN** 复习计划按偏移后的时间显示到期项，各路径的到期复习入口显示对应数量
+
+### Requirement: Due actions identify the path being reviewed
+精通之路列表的到期复习入口 SHALL 显示对应路径与到期题数。点击时 MUST 进入该路径的复习会话，开始消息的题目范围 SHALL 与所选路径匹配。
+
+#### Scenario: More than one path is due
+- **WHEN** 两条路径分别有 1 项和 2 项复习到期
+- **THEN** 用户可以分别选择每条路径的复习入口，选择第二条路径只会复习第二条路径的 2 项

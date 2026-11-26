@@ -7,11 +7,11 @@
 ## Requirements
 
 ### Requirement: DeepTutor light theme
-The application SHALL use DeepTutor's light theme tokens across all screens: background `#fdfcf9`, primary `#b0501e`, and text, muted, border, success, and danger colors taken from DeepTutor `web/app/globals.css`, with card corner radius 16 (large cards 20).
+应用各页面 SHALL 使用 DeepTutor 的浅色主题，包括背景色 `#fdfcf9`、主色 `#b0501e`，取自 `web/app/globals.css` 的正文、弱化文字、边框、成功与危险配色，以及语义浅底色 `primarySoft`、`successSoft`、`dangerSoft`、`warningSoft`。字号和圆角使用统一阶梯，卡片圆角为 16，大卡片为 20。
 
 #### Scenario: Viewing any primary tab
 - **WHEN** 用户打开任一一级 Tab
-- **THEN** 页面背景、主按钮与选中的 Tab 使用 DeepTutor 浅色主题颜色
+- **THEN** 页面背景、卡片、状态徽章、主按钮与选中 Tab 均使用统一的 DeepTutor 浅色主题与语义浅底色 Token
 
 ### Requirement: DeepTutor Chinese terminology
 User-facing labels for chat, side chat, and Mastery Path SHALL use the Chinese text from DeepTutor `web/locales/zh/app.json` when an equivalent key exists.

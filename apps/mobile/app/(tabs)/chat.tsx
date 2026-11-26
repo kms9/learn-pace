@@ -1,11 +1,11 @@
-import { messageHandoffs, type Lf01ChatService } from "@learn-pace/app-host";
+import { chatTitleFromPrompt, messageHandoffs, type Lf01ChatService } from "@learn-pace/app-host";
 import type { StoredSession, StoredThread } from "@learn-pace/infra";
 import { useFocusEffect, useRouter } from "expo-router";
 import { useCallback, useState } from "react";
-import { Alert, KeyboardAvoidingView, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
+import { Alert, Keyboard, KeyboardAvoidingView, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { ChatConversation } from "../../src/components/ChatConversation";
-import { ChatAction, ChatSheet } from "../../src/components/chat-controls";
+import { ChatAction, ChatSearch, ChatSheet } from "../../src/components/chat-controls";
 import { HandoffCard } from "../../src/components/mastery/HandoffCard";
 import { useApp } from "../../src/context/AppContext";
 import { colors, radius, spacing } from "../../src/theme";
@@ -14,16 +14,19 @@ type Conversation = Awaited<ReturnType<Lf01ChatService["readConversation"]>>;
 type Sheet = { kind: "history" | "menu" } | { kind: "threads"; messageId?: string };
 
 export default function Chat() {
-  const { chat, snapshot, reload } = useApp();
+  const { chat, reload } = useApp();
   const router = useRouter();
   const [conversation, setConversation] = useState<Conversation | null>(null);
   const [version, setVersion] = useState(0);
   const [sessions, setSessions] = useState<StoredSession[]>([]);
+  const [query, setQuery] = useState("");
   const [threads, setThreads] = useState<StoredThread[]>([]);
   const [sheet, setSheet] = useState<Sheet | null>(null);
   const [error, setError] = useState<string>();
   const [navigating, setNavigating] = useState(false);
   const sessionId = conversation?.session.session_id;
+  const search = query.trim().toLocaleLowerCase();
+  const visibleSessions = sessions.filter(({ title }) => title.toLocaleLowerCase().includes(search));
 
   useFocusEffect(useCallback(() => {
     if (!sessionId) return;
@@ -43,6 +46,7 @@ export default function Chat() {
 
   async function history() {
     setError(undefined);
+    setQuery("");
     try {
       setSessions(await chat.listSessions());
       setSheet({ kind: "history" });
@@ -61,6 +65,7 @@ export default function Chat() {
 
   async function openSession(id?: string) {
     if (navigating) return;
+    Keyboard.dismiss();
     setNavigating(true);
     setError(undefined);
     try {
@@ -86,11 +91,14 @@ export default function Chat() {
   }
 
   function threadMarker(messageId: string) {
-    const count = threads.filter((thread) => thread.source_message_id === messageId && thread.detached_at === null).length;
-    if (!count) return null;
+    const attached = threads.filter((thread) => thread.source_message_id === messageId && thread.detached_at === null);
+    if (!attached.length) return null;
     return (
       <View style={styles.marker}>
-        <ChatAction label={`小老师 ×${count}`} onPress={() => { setError(undefined); setSheet({ kind: "threads", messageId }); }} />
+        <ChatAction label={`小老师 ×${attached.length}`} onPress={() => {
+          if (attached.length === 1) visitThread(attached[0]!.thread_id);
+          else { setError(undefined); setSheet({ kind: "threads", messageId }); }
+        }} />
       </View>
     );
   }
@@ -107,18 +115,12 @@ export default function Chat() {
   const matching = sheet?.kind === "threads" && sheet.messageId
     ? threads.filter((thread) => thread.source_message_id === sheet.messageId && thread.detached_at === null)
     : threads;
-  const model = snapshot.model.configured ? snapshot.model.settings?.model.replace(/^openai\//, "") : "模型未配置";
-
   return (
     <KeyboardAvoidingView behavior="padding" style={styles.screen}>
       <SafeAreaView edges={["top", "left", "right"]} style={styles.screen}>
         <View style={styles.header}>
-          <View style={styles.heading}>
-            <Text accessibilityRole="header" style={styles.title}>问答</Text>
-            <Pressable accessibilityRole="button" onPress={() => router.navigate("/me")}>
-              <Text style={styles.caption} numberOfLines={1}>{model}</Text>
-            </Pressable>
-          </View>
+          <Text accessibilityRole="header" numberOfLines={sessionId ? 2 : 1}
+            style={[styles.title, sessionId && styles.sessionTitle]}>{conversation?.session.title ?? "问答"}</Text>
           <ChatAction label="历史会话" onPress={() => void history()} />
           <ChatAction label="新对话" onPress={() => void openSession()} disabled={navigating} />
           {sessionId && <ChatAction label="会话菜单" onPress={() => { setError(undefined); setSheet({ kind: "menu" }); }} />}
@@ -129,17 +131,21 @@ export default function Chat() {
           sessionId={sessionId}
           initialMessages={conversation?.messages ?? []}
           startSession={startSession}
+          onFirstMessage={(id, content) => setConversation((current) =>
+            current?.session.session_id === id && current.session.model_id === null && current.session.title === "新对话"
+              ? { ...current, session: { ...current.session, title: chatTitleFromPrompt(content) } } : current)}
           onThreadsChanged={() => void refreshThreads()}
           renderThreadMarker={threadMarker}
           renderReplyExtra={(message) => messageHandoffs(message).map((handoff) => <HandoffCard handoff={handoff}
             key={`${message.turn_id}:${handoff.kind}:${handoff.path_id}:${handoff.kind === "open" ? handoff.session_id : handoff.module_id}`} />)}
         />
         {sheet?.kind === "history" && (
-          <ChatSheet title="历史会话" close={() => setSheet(null)}>
+          <ChatSheet title="历史会话" close={() => setSheet(null)} keyboard>
+            <ChatSearch label="搜索历史会话" value={query} change={setQuery} />
             <ChatAction label="新对话" primary onPress={() => void openSession()} disabled={navigating} />
             <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={styles.list}>
-              {sessions.length === 0 && <Text style={styles.caption}>暂无历史会话</Text>}
-              {sessions.map((session) => (
+              {visibleSessions.length === 0 && <Text style={styles.caption}>{search ? "未找到匹配的会话" : "暂无历史会话"}</Text>}
+              {visibleSessions.map((session) => (
                 <Pressable
                   key={session.session_id}
                   accessibilityRole="button"
@@ -192,11 +198,11 @@ export default function Chat() {
 const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: colors.background },
   header: {
-    minHeight: 62, flexDirection: "row", alignItems: "center", paddingHorizontal: spacing.sm,
+    minHeight: 54, flexDirection: "row", flexWrap: "wrap", alignItems: "center", paddingHorizontal: spacing.sm,
     borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.border,
   },
-  heading: { flex: 1, paddingLeft: spacing.xs },
-  title: { fontSize: 20, fontWeight: "700", color: colors.text },
+  title: { flex: 1, minWidth: 56, paddingLeft: spacing.xs, fontSize: 20, fontWeight: "700", color: colors.text },
+  sessionTitle: { flexBasis: "100%", flexShrink: 0, paddingTop: spacing.xs, fontSize: 16 },
   caption: { color: colors.muted, fontSize: 12, lineHeight: 18 },
   list: { paddingVertical: spacing.xs, gap: spacing.xs },
   item: { padding: spacing.md, borderRadius: radius.card, gap: spacing.xs, backgroundColor: colors.soft },

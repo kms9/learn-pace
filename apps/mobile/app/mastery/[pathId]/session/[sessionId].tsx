@@ -1,24 +1,26 @@
 import {
-  MasterySessionError, masteryModeLabels, masteryModeNotes, masteryStarters, type MasterySessionService, type StudyCard,
+  MasterySessionError, masteryModeLabels, masteryModeNotes, masteryStarters, masteryToolStatusLabel, type MasterySessionService, type StudyCard,
 } from "@learn-pace/app-host";
 import type { SessionMode } from "@learn-pace/domain";
 import type { StoredMessage, StoredSession } from "@learn-pace/infra";
 import { useHeaderHeight } from "expo-router/react-navigation";
 import { useFocusEffect, useLocalSearchParams, useRouter } from "expo-router";
-import { useCallback, useEffect, useRef, useState, type ComponentRef } from "react";
-import { Keyboard, KeyboardAvoidingView, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { ActivityIndicator, Keyboard, KeyboardAvoidingView, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
-import { ChatAction, ChatSheet } from "../../../../src/components/chat-controls";
+import { ChatAction, ChatSheet, ConversationComposer, ScrollToBottomButton, useConversationScroll } from "../../../../src/components/chat-controls";
 import { MasteryOutline } from "../../../../src/components/MasteryOutline";
 import { LevelUpCelebration } from "../../../../src/components/mastery/LevelUpCelebration";
-import { QuestionCard } from "../../../../src/components/mastery/QuestionCard";
+import { ObjectiveEvidence } from "../../../../src/components/mastery/ObjectiveEvidence";
+import { QuestionCard, type AnswerControls } from "../../../../src/components/mastery/QuestionCard";
 import { MessageContent } from "../../../../src/components/MessageContent";
 import { Action, Card, LoadingCard, ModelSetup, Page, RetryCard, styles } from "../../../../src/components/Shell";
 import { useApp } from "../../../../src/context/AppContext";
-import { onForeground } from "../../../../src/context/useMasteryProjection";
-import { colors, spacing } from "../../../../src/theme";
+import { onForeground, useMasteryProjection } from "../../../../src/context/useMasteryProjection";
+import { colors, radius, spacing } from "../../../../src/theme";
 
 type Session = Awaited<ReturnType<MasterySessionService["openSession"]>>;
+type SessionSheet = "outline" | { objectiveId: string } | null;
 const modes: readonly SessionMode[] = ["outline", "study", "review"];
 const modeTitles = { outline: "定下你的大纲", study: "", review: "回头过一遍学过的" };
 
@@ -66,12 +68,24 @@ function SessionScreen({ pathId, sessionId }: { pathId: string; sessionId: strin
   const [readError, setReadError] = useState<string>();
   const [attempt, setAttempt] = useState(0);
   const [draft, setDraft] = useState("");
-  const [sheet, setSheet] = useState(false);
+  const [sheet, setSheet] = useState<SessionSheet>(null);
+  const [toolName, setToolName] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [celebration, setCelebration] = useState<string[]>([]);
+  const [answerBar, setAnswerBar] = useState<{ interactionId: string; controls: AnswerControls }>();
   const active = useRef(false);
-  const scroll = useRef<ComponentRef<typeof ScrollView>>(null);
-  const follow = useRef(true);
+  const { scroll, follow, showBottom, scrollEvents, scrollToBottom } = useConversationScroll();
+  const onAnswerControls = useCallback((interactionId: string, controls: AnswerControls | null) => {
+    if (controls) follow.current = false;
+    setAnswerBar((current) => controls ? { interactionId, controls }
+      : current?.interactionId === interactionId ? undefined : current);
+  }, [follow]);
+
+  useEffect(() => {
+    if (!answerBar) return;
+    const subscription = Keyboard.addListener("keyboardDidHide", answerBar.controls.finishEditing);
+    return () => subscription.remove();
+  }, [answerBar]);
 
   useFocusEffect(useCallback(() => {
     let mounted = true;
@@ -79,6 +93,7 @@ function SessionScreen({ pathId, sessionId }: { pathId: string; sessionId: strin
     let messageEvents = 0;
     let settled: Set<string> | undefined;
     let followedTurn = false;
+    const unobserveActivity = mastery.observeActivity(sessionId, setToolName);
     const unobserveMessages = mastery.observeMessages(sessionId, (message) => {
       messageEvents++;
       setMessages((items) => {
@@ -118,7 +133,7 @@ function SessionScreen({ pathId, sessionId }: { pathId: string; sessionId: strin
     const unobservePath = mastery.observePath(pathId, refresh);
     const stopForeground = onForeground(refresh);
     refresh();
-    return () => { mounted = false; unobserveMessages(); unobservePath(); stopForeground(); };
+    return () => { mounted = false; unobserveActivity(); unobserveMessages(); unobservePath(); stopForeground(); };
   }, [attempt, mastery, pathId, sessionId]));
 
   function perform(run: () => Promise<unknown>) {
@@ -134,6 +149,7 @@ function SessionScreen({ pathId, sessionId }: { pathId: string; sessionId: strin
   const generating = runningId === sessionId && (messages.some(({ status }) => status === "generating") || busy);
   const disabled = busy || runningId !== undefined;
   const configured = snapshot.model.configured;
+  const model = configured ? snapshot.model.settings?.model.replace(/^openai\//, "") : undefined;
   const mode = data?.session.mode ?? "outline";
 
   function send(value: string) {
@@ -159,7 +175,9 @@ function SessionScreen({ pathId, sessionId }: { pathId: string; sessionId: strin
   function cardView(card: StudyCard) {
     return <QuestionCard key={card.interaction_id} card={card} submitting={generating}
       disabled={disabled || !configured || mode === "outline"}
+      onAnswerControls={onAnswerControls}
       submit={(answers) => {
+        follow.current = true;
         Keyboard.dismiss();
         perform(() => mastery.submitAnswer(pathId, sessionId, card.interaction_id, answers));
       }}
@@ -173,22 +191,27 @@ function SessionScreen({ pathId, sessionId }: { pathId: string; sessionId: strin
     <SafeAreaView style={local.screen} edges={["left", "right", "bottom"]}>
         <View style={local.top}>
           <View style={local.topRow}>
-            <View accessibilityRole="tablist" style={local.modes}>
-              {modes.map((key) => <Pressable key={key} accessibilityRole="tab" accessibilityLabel={masteryModeLabels[key]}
-                accessibilityState={{ selected: key === mode, disabled }} disabled={disabled}
-                onPress={() => perform(() => mastery.switchMode(pathId, sessionId, key))}
-                style={[local.mode, key === mode && local.activeMode]}>
-                <Text style={local.modeLabel}>{masteryModeLabels[key]}</Text>
-              </Pressable>)}
-            </View>
             <ProgressRing {...summary} />
-            <ChatAction label="大纲" onPress={() => setSheet(true)} />
+            <View style={local.topic}>
+              <Text accessibilityRole="header" numberOfLines={1} style={local.topicName}>{data.status.path_name}</Text>
+              {!!next.knowledge_point_name && <Text numberOfLines={1} style={styles.body}>当前 · {next.knowledge_point_name}</Text>}
+              {summary.dueCount > 0 && <Text style={styles.body}>{`${summary.dueCount} 项复习已到期`}</Text>}
+            </View>
+            <ChatAction label="大纲" onPress={() => { Keyboard.dismiss(); setSheet("outline"); }} />
           </View>
-          <Text style={styles.body}>{`已掌握 ${summary.mastered} / 共 ${summary.total}（${summary.percentage}%） · ${summary.dueCount} 项复习已到期`}</Text>
-          {!!masteryModeNotes[mode] && <Text style={styles.body}>{masteryModeNotes[mode]}</Text>}
+          <View accessibilityRole="tablist" style={local.modes}>
+            {modes.map((key) => <Pressable key={key} accessibilityRole="tab" accessibilityLabel={masteryModeLabels[key]}
+              accessibilityState={{ selected: key === mode, disabled }} disabled={disabled}
+              onPress={() => perform(() => mastery.switchMode(pathId, sessionId, key))}
+              style={[local.mode, key === mode && local.activeMode]}>
+              <Text style={[local.modeLabel, key === mode && local.activeModeLabel]}>{masteryModeLabels[key]}</Text>
+            </Pressable>)}
+          </View>
+          {messages.length === 0 && !!masteryModeNotes[mode] && <Text style={styles.body}>{masteryModeNotes[mode]}</Text>}
         </View>
+        <View style={local.scroll}>
         <ScrollView style={local.scroll} contentContainerStyle={local.messages} ref={scroll} keyboardShouldPersistTaps="handled"
-          onScrollBeginDrag={() => { follow.current = false; }}
+          {...scrollEvents}
           onContentSizeChange={() => { if (follow.current && messages.length) scroll.current?.scrollToEnd({ animated: false }); }}>
           {!configured && <ModelSetup />}
           {readError && <RetryCard message={readError} retry={retryRead} />}
@@ -201,7 +224,14 @@ function SessionScreen({ pathId, sessionId }: { pathId: string; sessionId: strin
             {message.role === "user" ? <Text selectable style={local.userText}>{message.content}</Text> : <>
               <Text style={local.author}>Dito</Text>
               <MessageContent content={message.content} streaming={message.status === "generating"} />
-              {message.status === "generating" && <Text style={styles.body}>正在生成…</Text>}
+              {message.status === "generating" && (toolName || !message.content) && (
+                <View style={local.toolActivity}>
+                  <ActivityIndicator size="small" color={colors.muted} />
+                  <Text accessibilityLiveRegion="polite" style={styles.body}>
+                    {toolName ? masteryToolStatusLabel(toolName) : "正在生成…"}
+                  </Text>
+                </View>
+              )}
               {(message.status === "failed" || message.status === "interrupted") && <>
                 <Text style={styles.body}>{message.status === "interrupted" ? "回复已中断" : String(message.metadata?.error ?? "未完成回复")}</Text>
                 <ChatAction label="重试" disabled={disabled || !configured} onPress={() => {
@@ -214,6 +244,8 @@ function SessionScreen({ pathId, sessionId }: { pathId: string; sessionId: strin
           </View>)}
           {data.cards.filter((card) => !assignedTurns.has(card.turn_id)).map(cardView)}
         </ScrollView>
+        {showBottom && !answerBar && <ScrollToBottomButton onPress={scrollToBottom} />}
+        </View>
         <LevelUpCelebration names={celebration} dismiss={() => setCelebration([])} />
         <View style={local.bottom}>
           {mode === "outline" && summary.total > 0 && <View style={local.ready}>
@@ -222,20 +254,45 @@ function SessionScreen({ pathId, sessionId }: { pathId: string; sessionId: strin
           </View>}
           {waiting && <Text accessibilityRole="alert" style={styles.body}>同一精通目标的另一会话正在进行，请等它结束再发送。</Text>}
           {error && <Text accessibilityRole="alert" style={local.error}>{error}</Text>}
-          <View style={local.composer}>
-            <TextInput accessibilityLabel="给导师发消息" testID="mastery-composer" placeholder="给导师发消息"
-              placeholderTextColor={colors.muted} multiline value={draft} onChangeText={setDraft} style={local.input} />
-            {generating || runningId === sessionId && !busy ? <ChatAction label="停止" onPress={() => mastery.stop(pathId, sessionId)} /> :
-              <ChatAction label="发送" primary disabled={disabled || !configured || !draft.trim()} onPress={() => send(draft)} />}
-          </View>
+          {answerBar ? <View style={local.answerActions} testID="mastery-answer-actions">
+            <ChatAction label="收起键盘" onPress={() => { answerBar.controls.finishEditing(); Keyboard.dismiss(); }} />
+            {answerBar.controls.next && <ChatAction label="下一题" onPress={answerBar.controls.next} />}
+            <ChatAction label={answerBar.controls.submitLabel} primary disabled={!answerBar.controls.canSubmit}
+              onPress={answerBar.controls.submit} />
+          </View> : <ConversationComposer label="给导师发消息" testID="mastery-composer" placeholder="给导师发消息" draft={draft}
+            onChangeText={setDraft} send={() => send(draft)} sendDisabled={disabled || !configured || !draft.trim()}
+            stop={generating || runningId === sessionId && !busy ? () => mastery.stop(pathId, sessionId) : undefined} model={model} />}
         </View>
-        {sheet && <ChatSheet title="大纲" close={() => setSheet(false)}>
+        {sheet === "outline" && <ChatSheet title="大纲" close={() => setSheet(null)}>
           <ScrollView style={local.sheet} contentContainerStyle={local.sheetContents}>
-            <MasteryOutline map={map} current={next.knowledge_point_id} />
+            <MasteryOutline map={map} current={next.knowledge_point_id} onObjective={(objectiveId) => setSheet({ objectiveId })} />
           </ScrollView>
         </ChatSheet>}
+        {sheet && sheet !== "outline" && <SessionEvidence key={sheet.objectiveId} pathId={pathId}
+          objectiveId={sheet.objectiveId} disabled={disabled} close={() => setSheet(null)} />}
     </SafeAreaView>
   </KeyboardAvoidingView>;
+}
+
+function SessionEvidence({ pathId, objectiveId, disabled, close }: {
+  pathId: string; objectiveId: string; disabled: boolean; close: () => void;
+}) {
+  const { mastery } = useApp();
+  const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState<string>();
+  const read = useCallback(() => mastery.objectiveEvidence(pathId, objectiveId), [mastery, objectiveId, pathId]);
+  const observe = useCallback((refresh: () => void) => mastery.observePath(pathId, refresh), [mastery, pathId]);
+  const { data, error } = useMasteryProjection(read, observe);
+
+  return <ObjectiveEvidence evidence={data} close={close} busy={disabled || saving}
+    loadingError={saveError ?? (error === undefined ? undefined : messageFor(error))}
+    setMastery={(mastered, note) => {
+      setSaving(true);
+      setSaveError(undefined);
+      void mastery.setObjectiveMastery(pathId, objectiveId, mastered, note)
+        .catch((cause: unknown) => setSaveError(messageFor(cause)))
+        .finally(() => setSaving(false));
+    }} />;
 }
 
 function ProgressRing({ mastered, total, percentage }: { mastered: number; total: number; percentage: number }) {
@@ -255,27 +312,32 @@ function ProgressRing({ mastered, total, percentage }: { mastered: number; total
 
 const local = StyleSheet.create({
   screen: { flex: 1, backgroundColor: colors.background },
-  top: { borderBottomWidth: 1, borderColor: colors.border, paddingHorizontal: spacing.sm, paddingVertical: spacing.xs, gap: spacing.xs },
-  topRow: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: spacing.xs },
-  modes: { flex: 1, flexDirection: "row", gap: 3 },
-  mode: { minHeight: 44, flexGrow: 1, alignItems: "center", justifyContent: "center", paddingHorizontal: 4, borderRadius: 9 },
-  activeMode: { backgroundColor: colors.soft },
-  modeLabel: { fontSize: 14, color: colors.text, fontWeight: "600" },
+  top: { borderBottomWidth: StyleSheet.hairlineWidth, borderColor: colors.border, paddingHorizontal: spacing.md,
+    paddingBottom: spacing.sm, gap: spacing.xs },
+  topRow: { flexDirection: "row", alignItems: "center", gap: spacing.sm },
+  topic: { flex: 1, minWidth: 0 },
+  topicName: { fontSize: 16, color: colors.text, fontWeight: "700" },
+  modes: { flexDirection: "row", gap: 3, padding: 3, backgroundColor: colors.soft, borderRadius: 12 },
+  mode: { minHeight: 44, flex: 1, alignItems: "center", justifyContent: "center", paddingHorizontal: 4, borderRadius: 9 },
+  activeMode: { backgroundColor: colors.surface },
+  modeLabel: { fontSize: 14, color: colors.muted, fontWeight: "600", textAlign: "center" },
+  activeModeLabel: { color: colors.primary },
   ring: { width: 42, height: 42, alignItems: "center", justifyContent: "center" },
   ringDot: { width: 4, height: 4, borderRadius: 2, position: "absolute" },
   ratio: { color: colors.text, fontSize: 10, fontWeight: "700" },
   scroll: { flex: 1 },
   messages: { padding: spacing.md, gap: spacing.md },
   message: { gap: spacing.xs },
-  user: { alignSelf: "flex-end", backgroundColor: colors.soft, padding: spacing.sm, borderRadius: 14, maxWidth: "90%" },
+  toolActivity: { flexDirection: "row", alignItems: "center", gap: spacing.xs },
+  user: { alignSelf: "flex-end", backgroundColor: colors.soft, padding: spacing.sm,
+    borderRadius: radius.large, borderBottomRightRadius: 6, maxWidth: "90%" },
   userText: { color: colors.text, fontSize: 16, lineHeight: 22 },
   author: { color: colors.primary, fontWeight: "700" },
-  bottom: { borderTopWidth: 1, borderColor: colors.border, padding: spacing.sm, gap: spacing.xs },
-  ready: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: spacing.xs },
+  bottom: { paddingHorizontal: spacing.md, paddingVertical: spacing.sm, gap: spacing.xs },
+  answerActions: { flexDirection: "row", flexWrap: "wrap", justifyContent: "flex-end", gap: spacing.xs },
+  ready: { flexDirection: "row", alignItems: "center", gap: spacing.xs, borderRadius: radius.card,
+    padding: spacing.sm, backgroundColor: colors.soft },
   readyLabel: { color: colors.text, flex: 1, fontWeight: "600" },
-  composer: { flexDirection: "row", gap: spacing.xs, alignItems: "flex-end" },
-  input: { flex: 1, color: colors.text, borderColor: colors.border, borderWidth: 1, borderRadius: 12,
-    minHeight: 44, maxHeight: 110, paddingHorizontal: spacing.sm, fontSize: 16 },
   error: { color: colors.danger },
   sheet: { flexGrow: 0, maxHeight: 470 },
   sheetContents: { paddingBottom: spacing.md },

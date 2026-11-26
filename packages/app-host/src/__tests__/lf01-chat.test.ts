@@ -79,6 +79,8 @@ it("persists validated handoffs on the assistant reply without changing the lear
   const previousCard = await store.getInteraction("question");
   const { session_id } = await chat.createSession();
   const reply = await chat.send(session_id, "带我回到之前的比例学习，也给我另开一次的选项");
+  expect(request(0).messages[0].content).toContain("回复正文只写一句简短说明");
+  expect(request(4).messages.at(-1).content).toContain("省略内部 ID");
   expect(reply.status).toBe("committed");
   expect(messageHandoffs(reply)).toMatchObject([
     { ...opening, kind: "open", path_name: "比例", emoji: "📏", total: 1, session_title: "练习比例", session_awaiting: true },

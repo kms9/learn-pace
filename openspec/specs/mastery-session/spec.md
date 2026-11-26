@@ -48,3 +48,32 @@ Mastery sessions SHALL persist and recover messages with the same streaming, int
 #### Scenario: Interrupted tutor reply after force-stop
 - **WHEN** 导师回复生成中应用被强杀
 - **THEN** 重启后该回复显示为 `interrupted`，保留已收到的内容并可重试，不自动重发
+
+### Requirement: Current objective is visible in the session header
+精通会话 SHALL 在标题区展示当前知识点，使用路径进度投影给出的知识点，并随会话更新。
+
+#### Scenario: Finding the current topic without opening the outline
+- **WHEN** 学习者打开一条已有当前知识点的会话
+- **THEN** 用户可以从会话顶部看到当前知识点
+
+### Requirement: Live tutor tool progress indicator
+导师回合运行时，精通会话 SHALL 实时显示当前工具对应的中文状态提示。
+
+#### Scenario: Viewing real-time tutor tool progress
+- **WHEN** 导师在编辑大纲或学习回合中调用 `read_source` 或 `mastery_build` 等工具
+- **THEN** 正在生成的回复区实时显示对应中文阶段提示（如「正在读取资料…」「正在整理大纲…」），工具完成进入正文输出后切换为流式内容
+
+### Requirement: Compact mode note, interactive outline sheet, and scroll-to-bottom
+精通会话出现首条消息后，顶部模式说明 SHALL 自动收起。点击会话大纲弹层中的任一知识点 SHALL 打开其证据抽屉。上翻离开最新消息时，应用 SHALL 显示悬浮的「回到底部」按钮。
+
+#### Scenario: Mode description collapses after conversation begins
+- **WHEN** 用户在编辑大纲或复习会话中发出首条消息
+- **THEN** 顶部模式说明行自动收起，仅在空会话时展开显示，为对话和题卡留出更多可视空间
+
+#### Scenario: Inspecting objective evidence from the session outline sheet
+- **WHEN** 用户在精通会话顶部点「大纲」打开大纲弹层，并点击其中某个知识点
+- **THEN** 应用直接展示该知识点的掌握证据抽屉（含自报掌握入口），关闭抽屉后返回当前精通会话
+
+#### Scenario: Scrolling up in a long mastery session
+- **WHEN** 用户在长精通会话中向上翻看历史消息或题卡，距底部超过阈值
+- **THEN** 界面在输入框上方显示悬浮的「↓ 回到底部」按钮；点击后平滑滚回最新消息并恢复自动跟随

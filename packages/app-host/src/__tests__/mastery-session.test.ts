@@ -101,6 +101,34 @@ it("refuses empty study and reads live mode on each tool execution", async () =>
   expect(request(6).messages[0]?.content).toContain("这个模式是用来学的");
 });
 
+it("publishes tool activity for the current session and clears it on result or cancellation", async () => {
+  const { mastery, draft, configured, respond } = harness();
+  const { pathId, session, opening } = await draft();
+  await opening;
+  await configured();
+  const listener = vi.fn<(tool: string | null) => void>();
+  const other = vi.fn<(tool: string | null) => void>();
+  const unsubscribe = mastery.observeActivity(session.session_id, listener);
+  const unsubscribeOther = mastery.observeActivity("another-session", other);
+  respond(call("mastery_status", {}), call("mastery_build", outline), reply());
+  await mastery.send(pathId, session.session_id, "查看进度并制定大纲");
+  expect(listener.mock.calls.flat()).toEqual([null, "mastery_status", null, "mastery_build", null]);
+  expect(other.mock.calls.flat()).toEqual([null]);
+
+  const stop = mastery.observeActivity(session.session_id, (tool) => {
+    if (tool === "mastery_status") mastery.stop(pathId, session.session_id);
+  });
+  respond(call("mastery_status", {}));
+  await expect(mastery.send(pathId, session.session_id, "查看进度")).resolves.toMatchObject({ status: "interrupted" });
+  expect(listener.mock.calls.slice(-2).flat()).toEqual(["mastery_status", null]);
+  stop();
+  unsubscribe();
+  unsubscribeOther();
+  const reopened = vi.fn<(tool: string | null) => void>();
+  mastery.observeActivity(session.session_id, reopened)();
+  expect(reopened.mock.calls.flat()).toEqual([null]);
+});
+
 it("merges the profile, keeps unique objective IDs on replace and rejects cycles", async () => {
   const { built, store, mastery, respond } = harness();
   const { pathId, session } = await built();

@@ -7,11 +7,12 @@
 ## Requirements
 
 ### Requirement: Four-tab primary navigation
-The application SHALL provide exactly four primary bottom tabs in order: 学习 (Learning home), 问答 (Chat), 精通之路 (Mastery Path), and 我的 (Me/Settings), MUST open 问答 by default on launch, and switching between primary tabs MUST NOT reset or discard active state inside another tab.
+应用 SHALL 按「学习」「问答」「精通之路」「我的」顺序提供且仅提供四个底部一级 Tab。每个 Tab SHALL 显示统一风格的线性图标与文字标签，并随选中状态切换颜色。启动时 MUST 默认进入「问答」，切换一级 Tab 时 MUST 保留其他 Tab 的活动状态。
 
 #### Scenario: Launching the app opens chat
 - **WHEN** 用户启动应用
 - **THEN** 应用直接进入「问答」Tab，不弹出任何场景选择页
+- **AND** 底部四个一级 Tab 均展示统一风格的线性图标与中文标题，当前「问答」高亮为主色
 
 #### Scenario: User switches between primary tabs
 - **WHEN** 用户在任意一级 Tab 之间切换（例如从「问答」切换到「精通之路」再切回「问答」）

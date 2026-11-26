@@ -1,5 +1,5 @@
 import { Text, StyleSheet } from "react-native";
-import { EnrichedMarkdownText, type MarkdownStyle } from "react-native-enriched-markdown";
+import { EnrichedMarkdownText, type MarkdownStyle, type TextContextMenuItem } from "react-native-enriched-markdown";
 import { colors } from "../theme";
 
 const markdownStyle: MarkdownStyle = {
@@ -77,7 +77,9 @@ function prepareMarkdown(markdown: string, streaming: boolean) {
   return { formatted: parts.join(""), tail: markdown.slice(end) };
 }
 
-export function MessageContent({ content, streaming = false }: { content: string; streaming?: boolean }) {
+export function MessageContent({ content, streaming = false, selectionActions, onSelectionChange }: {
+  content: string; streaming?: boolean; selectionActions?: TextContextMenuItem[]; onSelectionChange?: (text: string) => void;
+}) {
   const { formatted, tail } = prepareMarkdown(content, streaming);
   return (
     <>
@@ -87,7 +89,9 @@ export function MessageContent({ content, streaming = false }: { content: string
           markdownStyle={markdownStyle}
           md4cFlags={{ latexMath: true }}
           flavor="github"
-          selectable={false}
+          selectable={!!selectionActions?.length || !!onSelectionChange}
+          contextMenuItems={selectionActions}
+          onRenderedSelectionChange={onSelectionChange && ((event) => onSelectionChange(event.nativeEvent.text))}
           allowTrailingMargin={false}
           streamingAnimation={streaming}
         />

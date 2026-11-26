@@ -3,7 +3,8 @@ import { MAX_DESIRED_RETENTION, MIN_DESIRED_RETENTION } from "@learn-pace/domain
 import { useState } from "react";
 import { Pressable, StyleSheet, Text, View } from "react-native";
 import { colors, spacing } from "../../theme";
-import { Action, Card, styles } from "../Shell";
+import { ChatAction } from "../chat-controls";
+import { Card, styles } from "../Shell";
 
 type Plan = Awaited<ReturnType<MasterySessionService["reviewPlan"]>>;
 const strategies = [
@@ -34,13 +35,14 @@ export function ReviewPlan({ plan, busy, locate, start, chooseStrategy, setReten
     {plan.due.length === 0 && <Text style={styles.body}>今天没有待复习的内容。继续学习，到时间会自动提醒你复习。</Text>}
     {[...plan.due, ...plan.upcoming].map((item) => <View key={item.knowledge_point_id} style={local.item}>
       <Pressable accessibilityRole="button" accessibilityLabel={`在大纲中定位${item.knowledge_point_name}`}
-        onPress={() => locate(item.knowledge_point_id)}>
+        onPress={() => locate(item.knowledge_point_id)} style={local.itemContent}>
         <Text style={styles.heading}>{item.knowledge_point_name}</Text>
         <Text style={styles.body}>{timeLabel(item.due_at - plan.now)} · 遗忘风险 {Math.round(item.forgetting_risk * 100)}%</Text>
         {!!item.reason && <Text style={styles.body}>{item.reason}</Text>}
         {item.lapse_count > 0 && <Text style={local.lapse}>{`有失误记录 · ${item.lapse_count} 次`}</Text>}
       </Pressable>
-      <Action label="开始复习" disabled={busy} onPress={() => start(item.knowledge_point_id)} secondary />
+      <ChatAction label={item.due_at <= plan.now ? "开始复习" : "提前复习"}
+        disabled={busy} onPress={() => start(item.knowledge_point_id)} />
     </View>)}
     <Text style={styles.heading}>复习策略</Text>
     <View style={local.strategies} accessibilityRole="radiogroup">
@@ -103,7 +105,9 @@ function RetentionSlider({ retention, disabled, save }: { retention: number; dis
 
 const local = StyleSheet.create({
   line: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", gap: spacing.xs },
-  item: { borderTopWidth: 1, borderColor: colors.border, paddingTop: spacing.sm, gap: spacing.xs },
+  item: { flexDirection: "row", alignItems: "center", borderTopWidth: StyleSheet.hairlineWidth,
+    borderColor: colors.border, paddingTop: spacing.sm, gap: spacing.xs },
+  itemContent: { flex: 1, minWidth: 0, minHeight: 44, justifyContent: "center" },
   lapse: { color: colors.danger, fontSize: 14 },
   strategies: { flexDirection: "row", flexWrap: "wrap", gap: spacing.xs },
   strategy: { minHeight: 42, justifyContent: "center", borderRadius: 8, borderWidth: 1,

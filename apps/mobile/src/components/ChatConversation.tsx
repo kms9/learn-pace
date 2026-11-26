@@ -1,21 +1,29 @@
-import { Lf01ChatError, messageQuotes, type ChatQuote, type ChatSelection } from "@learn-pace/app-host";
+import { Lf01ChatError, messageQuotes, renderedChatSelections, type ChatQuote, type ChatSelection } from "@learn-pace/app-host";
 import type { StoredMessage } from "@learn-pace/infra";
+import * as Clipboard from "expo-clipboard";
 import { useRouter } from "expo-router";
-import { useCallback, useEffect, useRef, useState, type ComponentRef, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import {
-  Alert, Keyboard, Pressable, ScrollView, StyleSheet, Text, TextInput, View, type NativeScrollEvent,
+  Alert, Keyboard, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View,
 } from "react-native";
 import { useApp } from "../context/AppContext";
 import { colors, radius, spacing } from "../theme";
-import { ChatAction, ChatSheet } from "./chat-controls";
+import { ChatAction, ChatSheet, ConversationComposer, ScrollToBottomButton, useConversationScroll } from "./chat-controls";
 import { MessageContent } from "./MessageContent";
 
 type SelectionAction = "quote" | "dito" | "goal";
+type SourceSelection = { message: StoredMessage; candidates?: ChatSelection[] };
+type RenderedSelection = { message: StoredMessage; text: string };
+const starterPrompts = [
+  ["讲懂一个概念", "请用一个生活中的例子解释："],
+  ["帮我解一道题", "请带我一步步分析这道题："],
+  ["定个学习目标", "我想学会……请帮我定一个可以验证的学习目标。"],
+] as const;
 type Properties = {
   sessionId?: string;
   initialMessages: StoredMessage[];
-  initialDraft?: string;
   startSession?: () => Promise<string>;
+  onFirstMessage?: (sessionId: string, text: string) => void;
   onThreadsChanged?: () => void;
   renderThreadMarker?: (messageId: string) => ReactNode;
   renderReplyExtra?: (message: StoredMessage) => ReactNode;
@@ -27,24 +35,43 @@ function feedback(error: unknown): string {
 }
 
 export function ChatConversation({
-  sessionId, initialMessages, initialDraft = "", startSession, onThreadsChanged, renderThreadMarker, renderReplyExtra, intro,
+  sessionId, initialMessages, startSession, onFirstMessage, onThreadsChanged, renderThreadMarker, renderReplyExtra, intro,
 }: Properties) {
   const { chat, snapshot } = useApp();
   const router = useRouter();
   const [messages, setMessages] = useState(initialMessages);
-  const [draft, setDraft] = useState(initialDraft);
+  const [draft, setDraft] = useState("");
   const [quotes, setQuotes] = useState<ChatQuote[]>([]);
   const [busy, setBusy] = useState<"turn" | "delete" | null>(null);
   const busyRef = useRef(false);
   const targetId = useRef(sessionId);
   const stopRequested = useRef(false);
   const [error, setError] = useState<string>();
-  const [selected, setSelected] = useState<StoredMessage | null>(null);
-  const scroll = useRef<ComponentRef<typeof ScrollView>>(null);
-  const follow = useRef(true);
+  const [selected, setSelected] = useState<SourceSelection | null>(null);
+  const [renderedSelection, setRenderedSelection] = useState<RenderedSelection | null>(null);
+  const { scroll, follow, showBottom, scrollEvents, scrollToBottom } = useConversationScroll();
+  const [copiedId, setCopiedId] = useState<string>();
+  const copyTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const copyRequest = useRef(0);
   const configured = snapshot.model.configured;
+  const model = configured ? snapshot.model.settings?.model.replace(/^openai\//, "") : undefined;
   const generating = busy === "turn" || (chat.isRunning(sessionId ?? "") && messages.some(({ status }) => status === "generating"));
   const latest = messages.filter(({ role, status }) => role === "assistant" && status === "committed").at(-1)?.message_id;
+
+  useEffect(() => () => { copyRequest.current++; clearTimeout(copyTimer.current); }, []);
+
+  async function copyReply(message: StoredMessage) {
+    const request = ++copyRequest.current;
+    try {
+      if (!await Clipboard.setStringAsync(message.content)) throw new Error();
+      if (request !== copyRequest.current) return;
+      clearTimeout(copyTimer.current);
+      setCopiedId(message.message_id);
+      copyTimer.current = setTimeout(() => setCopiedId(undefined), 1_500);
+    } catch {
+      if (request === copyRequest.current) setError("无法复制回复，请重试");
+    }
+  }
 
   const applyMessage = useCallback((updated: StoredMessage) => {
     setMessages((items) => {
@@ -97,6 +124,7 @@ export function ChatConversation({
       const request = chat.send(id, draft, quotes, (message) => {
         applyMessage(message);
         if (message.role === "user") {
+          if (!messages.some(({ role }) => role === "user")) onFirstMessage?.(id, message.content);
           setDraft("");
           setQuotes([]);
         }
@@ -135,30 +163,45 @@ export function ChatConversation({
     ]);
   }
 
-  async function choose(action: SelectionAction, selection: ChatSelection) {
-    if (!selected || !sessionId) return;
+  async function choose(message: StoredMessage, action: SelectionAction, selection: ChatSelection) {
+    if (!sessionId) return;
+    setError(undefined);
     if (action === "quote") {
       if (quotes.length >= 3) throw new Lf01ChatError("最多添加 3 条引用");
-      const quote = await chat.quoteSelection(sessionId, selected.message_id, selection);
+      const quote = await chat.quoteSelection(sessionId, message.message_id, selection);
       setQuotes((current) => [...current, quote]);
       setSelected(null);
       return;
     }
     if (action === "dito") {
-      const thread = await chat.createThread(sessionId, selected.message_id, selection);
+      const thread = await chat.createThread(sessionId, message.message_id, selection);
       follow.current = false;
       setSelected(null);
       onThreadsChanged?.();
       router.push({ pathname: "/chat/thread/[threadId]", params: { threadId: thread.thread_id } });
       return;
     }
-    const params = await chat.learningGoalSource(sessionId, selected.message_id, selection);
+    const params = await chat.learningGoalSource(sessionId, message.message_id, selection);
     setSelected(null);
     router.push({ pathname: "/mastery/new", params: { ...params } });
   }
 
-  function trackPosition({ contentSize, contentOffset, layoutMeasurement }: NativeScrollEvent) {
-    follow.current = contentSize.height - contentOffset.y - layoutMeasurement.height < 80;
+  function fromRendered(message: StoredMessage, action: SelectionAction, text: string) {
+    const candidates = renderedChatSelections(message.content, text);
+    if (candidates.length !== 1) {
+      setSelected({ message, candidates });
+      return;
+    }
+    void choose(message, action, candidates[0]!).catch((cause: unknown) => setError(feedback(cause)));
+  }
+
+  function trackSelection(message: StoredMessage, text: string) {
+    if (text.trim()) {
+      follow.current = false;
+      setRenderedSelection({ message, text });
+    } else {
+      setRenderedSelection((current) => current?.message.message_id === message.message_id ? null : current);
+    }
   }
 
   function followLatest() {
@@ -170,25 +213,27 @@ export function ChatConversation({
 
   return (
     <>
+      <View style={styles.scroll}>
       <ScrollView
         ref={scroll}
         testID="chat-messages"
         style={styles.scroll}
-        contentContainerStyle={styles.messages}
+        contentContainerStyle={[styles.messages, !messages.length && !intro && styles.emptyMessages]}
         keyboardShouldPersistTaps="handled"
-        onScrollBeginDrag={() => { follow.current = false; }}
-        onScrollEndDrag={({ nativeEvent }) => trackPosition(nativeEvent)}
-        onMomentumScrollEnd={({ nativeEvent }) => trackPosition(nativeEvent)}
+        {...scrollEvents}
         onLayout={followLatest}
         onContentSizeChange={followLatest}
       >
         {intro}
-        {messages.length === 0 && !intro && (
-          <View style={styles.empty}>
-            <Text style={styles.emptyTitle}>有什么想了解的？</Text>
-            <Text style={styles.emptyHint}>从一个问题开始，也可以继续之前的对话。</Text>
-          </View>
-        )}
+        {messages.length === 0 && !intro && <View style={styles.welcome}>
+          <Text accessibilityRole="header" style={styles.emptyTitle}>有什么想了解的？</Text>
+          {!!startSession && <View style={styles.starters}>
+            {starterPrompts.map(([label, prompt]) => <View key={label} style={styles.starter}>
+              <ChatAction label={label} disabled={!!draft || generating}
+                onPress={() => setDraft((current) => current || prompt)} />
+            </View>)}
+          </View>}
+        </View>}
         {messages.map((message) => {
           const isUser = message.role === "user";
           const done = message.status === "committed";
@@ -204,82 +249,72 @@ export function ChatConversation({
                   {typeof modelId === "string" && <Text style={styles.meta}>{modelId}</Text>}
                 </View>
               )}
-              <Pressable
+              {isUser ? <Pressable style={styles.bubble} testID="chat-user-message"
                 accessibilityActions={canSelect ? [{ name: "longpress", label: "选文" }] : undefined}
-                onAccessibilityAction={canSelect ? () => setSelected(message) : undefined}
-                onLongPress={canSelect ? () => setSelected(message) : undefined}
-                style={isUser ? styles.bubble : styles.answer}
-                testID={isUser ? "chat-user-message" : "chat-reply"}
-              >
-                {isUser ? (
-                  <>
-                    <QuoteList quotes={messageQuotes(message)} />
-                    <Text style={styles.prose}>{message.content}</Text>
-                  </>
-                ) : (
-                  <View pointerEvents="none" style={styles.answer}>
-                    <MessageContent content={message.content} streaming={live} />
-                    {live && <Text style={styles.meta}>正在生成…</Text>}
-                    {message.status === "interrupted" && <Text style={styles.meta}>生成已中断</Text>}
-                    {message.status === "failed" && (
-                      <Text style={styles.problem}>{String(message.metadata?.error ?? "回复失败，请重试")}</Text>
-                    )}
-                  </View>
+                onAccessibilityAction={canSelect ? () => setSelected({ message }) : undefined}
+                onLongPress={canSelect ? () => setSelected({ message }) : undefined}>
+                <QuoteList quotes={messageQuotes(message)} />
+                <Text style={styles.prose}>{message.content}</Text>
+              </Pressable> : <View style={styles.answer} testID="chat-reply">
+                <MessageContent content={message.content} streaming={live}
+                  onSelectionChange={canSelect && Platform.OS === "android" ? (text) => trackSelection(message, text) : undefined}
+                  selectionActions={canSelect && Platform.OS !== "android" ? [
+                  { text: "添加到对话框", onPress: ({ text }) => fromRendered(message, "quote", text) },
+                  { text: "问 Dito", visible: !!startSession, onPress: ({ text }) => fromRendered(message, "dito", text) },
+                  { text: "转为学习目标", visible: !!startSession, onPress: ({ text }) => fromRendered(message, "goal", text) },
+                ] : undefined} />
+                {live && <Text style={styles.meta}>正在生成…</Text>}
+                {message.status === "interrupted" && <Text style={styles.meta}>生成已中断</Text>}
+                {message.status === "failed" && (
+                  <Text style={styles.problem}>{String(message.metadata?.error ?? "回复失败，请重试")}</Text>
                 )}
-              </Pressable>
+              </View>}
               {!isUser && renderReplyExtra?.(message)}
               {renderThreadMarker?.(message.message_id)}
               {!isUser && !live && (
                 <View style={styles.tools}>
-                  {canSelect && <ChatAction label="选文" onPress={() => setSelected(message)} />}
+                  {canSelect && <ChatAction label="选文" subtle onPress={() => setSelected({ message })} />}
+                  {done && message.content.length > 0 && <ChatAction label={copiedId === message.message_id ? "已复制" : "复制"}
+                    subtle testID="copy-reply" onPress={() => void copyReply(message)} />}
                   {retryable && (
                     <ChatAction label="重试" disabled={!!busy || generating || !configured} onPress={() => repeat(message.message_id, "retry")} />
                   )}
                   {message.message_id === latest && (
-                    <ChatAction label="重新生成" disabled={!!busy || generating || !configured} onPress={() => repeat(message.message_id, "regenerate")} />
+                    <ChatAction label="重新生成" subtle disabled={!!busy || generating || !configured} onPress={() => repeat(message.message_id, "regenerate")} />
                   )}
-                  <ChatAction label="删除整轮" disabled={!!busy || generating} onPress={() => deleteTurn(message.message_id)} />
+                  <ChatAction label="删除整轮" subtle disabled={!!busy || generating} onPress={() => deleteTurn(message.message_id)} />
                 </View>
               )}
             </View>
           );
         })}
       </ScrollView>
+      {showBottom && <ScrollToBottomButton onPress={scrollToBottom} />}
+      </View>
       {error && <Text accessibilityRole="alert" style={[styles.problem, styles.feedback]}>{error}</Text>}
-      {!configured && (
-        <View style={styles.modelNotice}>
-          <Text style={styles.meta}>配置 DeepSeek Flash 后即可发送消息</Text>
-          <ChatAction label="打开模型设置" onPress={() => router.navigate("/me")} />
-        </View>
-      )}
       <View style={styles.composer}>
-        <QuoteList quotes={quotes} remove={(index) => setQuotes((current) => current.filter((_, i) => i !== index))} />
-        <View style={styles.composeRow}>
-          <TextInput
-            accessibilityLabel="输入消息"
-            testID="chat-composer"
-            multiline
-            editable={!busy && !generating}
-            value={draft}
-            onChangeText={setDraft}
-            placeholder="问 Dito…"
-            placeholderTextColor={colors.muted}
-            style={styles.input}
-          />
-          {generating ? (
-            <ChatAction label="停止生成" onPress={stop} />
-          ) : (
-            <ChatAction label="发送" onPress={send} primary disabled={!!busy || !configured || !draft.trim()} />
-          )}
-        </View>
+        {renderedSelection && messages.some(({ message_id }) => message_id === renderedSelection.message.message_id) && (
+          <View style={[styles.tools, styles.selectionActions]}>
+            <ChatAction label="添加到对话框" onPress={() => fromRendered(renderedSelection.message, "quote", renderedSelection.text)} />
+            {startSession && <ChatAction label="问 Dito" onPress={() => fromRendered(renderedSelection.message, "dito", renderedSelection.text)} />}
+            {startSession && <ChatAction label="转为学习目标" onPress={() => fromRendered(renderedSelection.message, "goal", renderedSelection.text)} />}
+          </View>
+        )}
+        <ConversationComposer label="输入消息" testID="chat-composer" placeholder="问 Dito…" draft={draft}
+          onChangeText={setDraft} editable={!busy && !generating} send={send}
+          sendDisabled={!!busy || !configured || !draft.trim()} stop={generating ? stop : undefined}
+          model={model} openModelSettings={() => router.navigate("/me")}>
+          <QuoteList quotes={quotes} remove={(index) => setQuotes((current) => current.filter((_, i) => i !== index))} />
+        </ConversationComposer>
       </View>
       {selected && (
         <SelectionSheet
-          key={selected.message_id}
-          content={selected.content}
+          key={selected.message.message_id}
+          content={selected.message.content}
+          candidates={selected.candidates}
           littleTutor={!!startSession}
           close={() => setSelected(null)}
-          submit={choose}
+          submit={(action, selection) => choose(selected.message, action, selection)}
         />
       )}
     </>
@@ -295,18 +330,21 @@ function QuoteList({ quotes, remove }: { quotes: ChatQuote[]; remove?: (index: n
   ));
 }
 
-function SelectionSheet({ content, littleTutor, close, submit }: {
+function SelectionSheet({ content, candidates, littleTutor, close, submit }: {
   content: string;
+  candidates?: ChatSelection[];
   littleTutor: boolean;
   close: () => void;
   submit: (action: SelectionAction, selection: ChatSelection) => Promise<void>;
 }) {
-  const [range, setRange] = useState({ start: 0, end: content.length });
+  const [range, setRange] = useState<{ start: number; end: number } | undefined>(
+    candidates ? undefined : { start: 0, end: content.length },
+  );
   const [error, setError] = useState<string>();
   const [busy, setBusy] = useState(false);
-  const excerpt = content.slice(range.start, range.end);
+  const excerpt = range ? content.slice(range.start, range.end) : "";
   async function choose(action: SelectionAction) {
-    if (busy) return;
+    if (busy || !range || !excerpt.trim()) return;
     setBusy(true);
     setError(undefined);
     try {
@@ -319,7 +357,13 @@ function SelectionSheet({ content, littleTutor, close, submit }: {
 
   return (
     <ChatSheet title="选中内容" close={close}>
-      <Text style={styles.meta}>默认选中整条消息。长按原文并拖动选区可裁切。</Text>
+      <Text style={styles.meta}>{candidates ? "请确认选文在原文中的位置，也可以长按原文后拖动选区。"
+        : "默认选中整条消息。长按原文并拖动选区可裁切。"}</Text>
+      {!!candidates?.length && <View style={styles.tools}>
+        {candidates.slice(0, 4).map((candidate, index) => <ChatAction key={candidate.start}
+          label={`第 ${index + 1} 处 · ${content.slice(Math.max(0, candidate.start - 8), candidate.start + 8).trim()}`}
+          onPress={() => setRange(candidate)} />)}
+      </View>}
       <TextInput
         accessibilityLabel="消息原文"
         value={content}
@@ -338,9 +382,9 @@ function SelectionSheet({ content, littleTutor, close, submit }: {
       </View>
       {error && <Text accessibilityRole="alert" style={styles.problem}>{error}</Text>}
       <View style={styles.tools}>
-        <ChatAction label="添加到对话框" disabled={busy} onPress={() => void choose("quote")} />
-        {littleTutor && <ChatAction label="问 Dito" disabled={busy} onPress={() => void choose("dito")} />}
-        {littleTutor && <ChatAction label="转为学习目标" disabled={busy} onPress={() => void choose("goal")} />}
+        <ChatAction label="添加到对话框" disabled={busy || !excerpt.trim()} onPress={() => void choose("quote")} />
+        {littleTutor && <ChatAction label="问 Dito" disabled={busy || !excerpt.trim()} onPress={() => void choose("dito")} />}
+        {littleTutor && <ChatAction label="转为学习目标" disabled={busy || !excerpt.trim()} onPress={() => void choose("goal")} />}
       </View>
     </ChatSheet>
   );
@@ -349,13 +393,15 @@ function SelectionSheet({ content, littleTutor, close, submit }: {
 const styles = StyleSheet.create({
   scroll: { flex: 1 },
   messages: { flexGrow: 1, paddingHorizontal: spacing.md, paddingTop: spacing.md, paddingBottom: spacing.sm, gap: spacing.lg },
-  empty: { flexGrow: 1, justifyContent: "center", alignItems: "center", gap: spacing.sm, paddingBottom: 56 },
-  emptyTitle: { color: colors.text, fontSize: 25, fontWeight: "700" },
-  emptyHint: { color: colors.muted, fontSize: 14, textAlign: "center" },
+  emptyMessages: { justifyContent: "center" },
+  welcome: { gap: spacing.lg, alignItems: "center" },
+  starters: { flexDirection: "row", flexWrap: "wrap", justifyContent: "center", gap: spacing.xs },
+  starter: { borderRadius: radius.card, backgroundColor: colors.soft },
+  emptyTitle: { color: colors.text, fontSize: 28, fontWeight: "700", textAlign: "center" },
   message: { gap: spacing.xs },
   bubble: {
     alignSelf: "flex-end", maxWidth: "92%", backgroundColor: colors.soft, paddingHorizontal: spacing.md,
-    paddingVertical: spacing.sm, borderRadius: radius.card, gap: spacing.xs,
+    paddingVertical: spacing.sm, borderRadius: radius.large, borderBottomRightRadius: 6, gap: spacing.xs,
   },
   prose: { color: colors.text, fontSize: 16, lineHeight: 24 },
   answer: { gap: spacing.xs },
@@ -364,17 +410,9 @@ const styles = StyleSheet.create({
   meta: { color: colors.muted, fontSize: 13, lineHeight: 19 },
   problem: { color: colors.danger, fontSize: 14 },
   tools: { flexDirection: "row", flexWrap: "wrap", alignItems: "center" },
+  selectionActions: { backgroundColor: colors.soft, borderRadius: radius.card, marginBottom: spacing.xs },
   feedback: { paddingHorizontal: spacing.md },
-  modelNotice: { paddingHorizontal: spacing.md, flexDirection: "row", alignItems: "center", flexWrap: "wrap" },
-  composer: {
-    marginHorizontal: spacing.md, marginBottom: spacing.sm, padding: spacing.xs, borderWidth: 1,
-    borderColor: colors.border, backgroundColor: colors.surface, borderRadius: radius.large, gap: spacing.xs,
-  },
-  composeRow: { alignItems: "flex-end", flexDirection: "row", gap: spacing.xs },
-  input: {
-    flex: 1, minHeight: 44, maxHeight: 132, paddingVertical: spacing.sm, paddingHorizontal: spacing.sm,
-    color: colors.text, fontSize: 16, textAlignVertical: "center",
-  },
+  composer: { paddingHorizontal: spacing.md, paddingTop: spacing.xs, paddingBottom: spacing.sm },
   quote: {
     borderLeftWidth: 2, borderLeftColor: colors.primary, backgroundColor: colors.soft, paddingHorizontal: spacing.sm,
     paddingVertical: spacing.xs, flexDirection: "row", alignItems: "center", borderRadius: 8,

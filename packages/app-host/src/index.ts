@@ -23,7 +23,9 @@ export interface ApplicationHost {
 
 export { StudyWorkbench, type StudySnapshot } from "./study-workbench.js";
 export { Lf01ChatError, Lf01ChatService, messageQuotes, type ChatSelection, type ChatQuote } from "./lf01-chat.js";
-export { MasterySessionError, MasterySessionService, type TopicMaterial } from "./mastery/session-service.js";
+export { renderedChatSelections } from "./chat-selection.js";
+export { chatTitleFromPrompt } from "./chat-turns.js";
+export { MasterySessionError, MasterySessionService, masteryToolStatusLabel, type TopicMaterial } from "./mastery/session-service.js";
 export type { Answers, StudyCard } from "./mastery/study.js";
 export { masteryModeLabels, masteryModeNotes, masteryNextLabels, masteryStarters } from "./mastery/copy.js";
 export { LearningHomeService, summarizePath, type LearningAttention, type LearningRecord } from "./learning-home.js";

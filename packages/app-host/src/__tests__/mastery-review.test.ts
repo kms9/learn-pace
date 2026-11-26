@@ -68,6 +68,25 @@ async function prepare(definitions: { id: string; name: string; type: KnowledgeT
 
 const procedure = { id: "a", name: "约分", type: "procedure", mastered: true } as const;
 
+it("starts a review with the selected path's due objectives when multiple paths have reviews", async () => {
+  const { mastery, store, clock, read } = await prepare([
+    procedure, { ...procedure, id: "b", name: "通分" }, { ...procedure, id: "c", name: "分数比较" },
+  ]);
+  const progress = await read();
+  const module = progress.modules[0]!;
+  await store.save({ ...progress, modules: [{ ...module, knowledge_points: module.knowledge_points.slice(0, 1) }] });
+  await store.save({ ...progress, book_id: "other", name: "比较分数",
+    modules: [{ ...module, knowledge_points: module.knowledge_points.slice(1) }] });
+  clock.time = Math.max(...Object.values(progress.repetition_states).map(({ next_review_at }) => next_review_at)) + 1;
+  const topics = await mastery.listTopics();
+  expect(topics.map(({ id, dueCount }) => [id, dueCount])).toEqual([["other", 2], [path, 1]]);
+  const { session, opening } = await mastery.startReview("other");
+  await opening;
+  expect(session.path_id).toBe("other");
+  expect((await store.listMessages(session.session_id))[0]?.content).toBe("我们来复习今天到期的这几项：通分、分数比较。");
+  expect(await store.listSessionsByPath(path)).toEqual([]);
+});
+
 it("gates both review tools by mastery, admits self-reports without a due slot, and does not open again on manual switch", async () => {
   const { mastery, store, push, send, quiz, read, request } = await prepare([
     { ...procedure, mastered: false }, { id: "b", name: "等值分数", type: "concept", mastered: false },

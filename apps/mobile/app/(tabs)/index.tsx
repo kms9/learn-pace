@@ -2,7 +2,7 @@ import { useRouter } from "expo-router";
 import { useCallback, useState } from "react";
 import { Pressable, StyleSheet, Text, View } from "react-native";
 import { MasteryProgress } from "../../src/components/MasteryOutline";
-import { Action, LoadingCard, ModelSetup, Page, RetryCard, styles } from "../../src/components/Shell";
+import { Action, LoadingCard, ModelSetup, Page, RetryCard, StatusBadge, styles } from "../../src/components/Shell";
 import { useApp } from "../../src/context/AppContext";
 import { useMasteryProjection } from "../../src/context/useMasteryProjection";
 import { colors, spacing } from "../../src/theme";
@@ -27,8 +27,10 @@ export default function Home() {
             : { pathId: item.path.id, sessionId: "new", mode: "review" },
         })}>
         <Text style={local.name}>{item.path.emoji} {item.path.name}</Text>
-        <Text style={styles.body} numberOfLines={2}>{item.kind === "review" ? `${item.path.dueCount} 项复习已到期`
-          : `${item.answered ? "待评分" : "待作答"} · ${item.prompt}`}</Text>
+        {item.kind === "review" ? <StatusBadge tone="warning" label={`${item.path.dueCount} 项复习已到期`} /> : <>
+          <StatusBadge label={item.answered ? "待评分" : "待作答"} />
+          <Text style={styles.body} numberOfLines={2}>{item.prompt}</Text>
+        </>}
       </Pressable>)}
     </View>}
     {!!data?.records.length && <View style={local.section}>

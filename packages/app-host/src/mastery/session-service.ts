@@ -18,6 +18,22 @@ import { displayStudyAnswer, projectStudyCard, questionLeaves, savedAnswers, Stu
 const blocked = "同一精通目标的另一会话正在进行，请等它结束再发送";
 const emptyOutline = "还没有可以学习的大纲。请留在「编辑大纲」模式，先和导师定下大纲。";
 
+const toolLabels = new Map([
+  ["read_source", "正在读取资料…"], ["mastery_profile", "正在更新学习档案…"],
+  ["mastery_build", "正在整理大纲…"], ["mastery_revise", "正在修订大纲…"],
+  ["mastery_mode", "正在切换模式…"], ["mastery_quiz", "正在准备题目…"],
+  ["mastery_grade", "正在批改作答…"], ["mastery_assess", "正在评估你的解释…"],
+  ["mastery_status", "正在查看学习进度…"], ["mastery_note_explained", "正在记录讲解…"],
+  ["mastery_defer_objective", "正在调整学习顺序…"], ["mastery_skip_question", "正在跳过题目…"],
+  ["mastery_repair_question", "正在复核题目…"],
+]);
+
+export function masteryToolStatusLabel(toolName: string): string {
+  return toolLabels.get(toolName) ?? "正在处理…";
+}
+
+type ActivityObserver = (toolName: string | null) => void;
+
 export type TopicMaterial =
   | { kind: "chat"; sessionId: string; messageId?: string; excerpt?: string }
   | { kind: "text_note"; label?: string; text: string };
@@ -28,6 +44,8 @@ export class MasterySessionService {
   private readonly previews = new Map<string, OutlinePreview>();
   private readonly observers = new Map<string, Set<() => void>>();
   private readonly changeObservers = new Set<() => void>();
+  private readonly activityObservers = new Map<string, Set<ActivityObserver>>();
+  private readonly activity = new Map<string, string>();
 
   constructor(private readonly store: AppStore, private readonly clock: Clock, private readonly makeId: () => string,
     getModelConfig: () => Promise<ModelConfig | null>, private readonly fetch?: typeof globalThis.fetch) {
@@ -255,6 +273,27 @@ export class MasterySessionService {
     return this.turns.observeMessages(sessionId, observer);
   }
 
+  observeActivity(sessionId: string, observer: ActivityObserver): () => void {
+    const subscribers = this.activityObservers.get(sessionId) ?? new Set<ActivityObserver>();
+    observer(this.activity.get(sessionId) ?? null);
+    subscribers.add(observer);
+    this.activityObservers.set(sessionId, subscribers);
+    return () => {
+      subscribers.delete(observer);
+      if (!subscribers.size) this.activityObservers.delete(sessionId);
+    };
+  }
+
+  private publishActivity(sessionId: string, toolName: string | null) {
+    if ((this.activity.get(sessionId) ?? null) === toolName) return;
+    if (toolName === null) this.activity.delete(sessionId);
+    else this.activity.set(sessionId, toolName);
+    for (const notify of this.activityObservers.get(sessionId) ?? []) {
+      // A view observer must not interrupt the tutor turn.
+      try { notify(toolName); } catch {}
+    }
+  }
+
   stop(pathId: string, sessionId: string) {
     this.turns.stop(pathId, sessionId);
   }
@@ -471,6 +510,7 @@ export class MasterySessionService {
     });
     const snapshot = await status();
     const handoffModule = snapshot.map.modules.find(({ id }) => id === handoffModuleId);
+    const activeTools = new Map<string, string>();
     return { runtime, allowedTools, measure: true, options: {
       mode, pathId, instructions: masteryInstructions(mode, {
         ...snapshot, ...(receipt && { pending_interaction: receipt }),
@@ -479,7 +519,12 @@ export class MasterySessionService {
         + (challenge ? "\n\n学习者要求复核上述题卡。先核实问题与判定依据，确认确有题目或答案错误时再使用 mastery_repair_question。" : "")
         + (handoffModule ? `\n\n这次会话由学习者从问答打开，所选模块：${JSON.stringify({ id: handoffModule.id, name: handoffModule.name })}。` : ""),
       maxTurns: 8,
-    }, toolSettled: () => this.publish(pathId) };
+    }, toolSettled: () => this.publish(pathId), onToolActivity: (activity) => {
+      if (!activity) activeTools.clear();
+      else if (activity.phase === "started") activeTools.set(activity.callId, activity.toolName);
+      else activeTools.delete(activity.callId);
+      this.publishActivity(session.session_id, [...activeTools.values()].at(-1) ?? null);
+    } };
   };
 }
 

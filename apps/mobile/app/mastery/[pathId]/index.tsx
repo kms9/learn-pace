@@ -1,15 +1,17 @@
 import { MasterySessionError, masteryModeLabels, masteryNextLabels } from "@learn-pace/app-host";
 import type { SessionMode } from "@learn-pace/domain";
-import { useLocalSearchParams, useRouter } from "expo-router";
+import { Stack, useLocalSearchParams, useRouter } from "expo-router";
 import { useCallback, useRef, useState, type ComponentRef } from "react";
-import { Alert, Keyboard, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
+import { Alert, Keyboard, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
 import { MasteryOutline, MasteryProgress } from "../../../src/components/MasteryOutline";
+import { ChatAction, ChatSheet } from "../../../src/components/chat-controls";
 import { LearnerProfileCard, ObjectiveEvidence, type Evidence } from "../../../src/components/mastery/ObjectiveEvidence";
 import { ReviewPlan } from "../../../src/components/mastery/ReviewPlan";
-import { Action, Card, LoadingCard, ModelSetup, Page, RetryCard, styles } from "../../../src/components/Shell";
+import { Action, Card, LoadingCard, ModelSetup, Page, RetryCard, StatusBadge, styles } from "../../../src/components/Shell";
 import { useApp } from "../../../src/context/AppContext";
 import { useMasteryProjection } from "../../../src/context/useMasteryProjection";
-import { colors, spacing } from "../../../src/theme";
+import { colors, radius, spacing, typography } from "../../../src/theme";
+import { formatRelativeTime } from "../../../src/utils/time";
 
 export default function MasteryPath() {
   const { pathId } = useLocalSearchParams<{ pathId: string }>();
@@ -25,8 +27,8 @@ export default function MasteryPath() {
   const evidenceRequest = useRef(0);
   const running = useRef(false);
   const scroll = useRef<ComponentRef<typeof ScrollView>>(null);
-  const objectives = useRef(new Map<string, ComponentRef<typeof View>>());
-  const [highlighted, setHighlighted] = useState<string>();
+  const pendingLocation = useRef<string | undefined>(undefined);
+  const [highlighted, setHighlighted] = useState<{ id: string }>();
 
   const read = useCallback(() => mastery.readTopic(pathId), [pathId, mastery]);
   const observe = useCallback((refresh: () => void) => mastery.observePath(pathId, refresh), [pathId, mastery]);
@@ -42,11 +44,28 @@ export default function MasteryPath() {
   }
 
   function locateObjective(id: string) {
-    const container = scroll.current?.getInnerViewRef();
-    const point = objectives.current.get(id);
-    if (!container || !point) return;
-    setHighlighted(id);
-    point.measureLayout(container, (_x, y) => scroll.current?.scrollTo({ y: Math.max(0, y - spacing.md), animated: true }));
+    pendingLocation.current = id;
+    setHighlighted({ id });
+  }
+
+  function attachObjective(id: string, point: ComponentRef<typeof View> | null) {
+    if (!point || pendingLocation.current !== id) return;
+    requestAnimationFrame(() => {
+      const container = scroll.current?.getInnerViewRef();
+      if (!container || pendingLocation.current !== id) return;
+      point.measureLayout(container, (_x, y) => {
+        if (pendingLocation.current !== id) return;
+        pendingLocation.current = undefined;
+        scroll.current?.scrollTo({ y: Math.max(0, y - spacing.md), animated: true });
+      });
+    });
+  }
+
+  function closeMenu() {
+    Keyboard.dismiss();
+    setMore(false);
+    setName(undefined);
+    setError(undefined);
   }
 
   function run(work: () => Promise<void>) {
@@ -93,30 +112,18 @@ export default function MasteryPath() {
   </Page>;
   const { map, next, summary } = topic;
   const hasOutline = summary.total > 0;
+  const material = topic.sources.filter(({ kind }) => kind !== "goal");
   return <Page title={topic.emoji + " " + topic.name} secondary keyboard scrollRef={scroll}>
+    <Stack.Screen options={{ headerRight: () => <Pressable accessibilityRole="button" accessibilityLabel="更多操作"
+      onPress={() => { setError(undefined); setMore(true); }} style={local.more}>
+      <Text style={local.moreLabel}>···</Text>
+    </Pressable> }} />
     {readError !== undefined && <RetryCard message="无法刷新精通目标" retry={retry} />}
-    <ModelSetup />
     <Card>
-      {topic.goal && <Text style={styles.body}>{topic.goal}</Text>}
-      {name === undefined ? <Action label="改名" onPress={() => setName(topic.name)} secondary /> : <>
-        <TextInput accessibilityLabel="主题名称" value={name} onChangeText={setName} style={local.input} maxLength={240} />
-        <Action label="保存名称" disabled={busy} onPress={() => run(async () => {
-          Keyboard.dismiss();
-          await mastery.renameTopic(pathId, name);
-          setName(undefined);
-          await reload();
-        })} />
-        <Action label="取消改名" onPress={() => setName(undefined)} secondary />
-      </>}
-      <View style={local.chips}>
-        {topic.sources.filter(({ kind }) => kind !== "goal").slice(0, 5).map(({ id, label }) =>
-          <Text key={id} style={local.chip}>{label}</Text>)}
-      </View>
       <Text style={styles.body}>{!hasOutline ? "去定大纲" : topic.status === "completed" ? "已完成" : "学习中"}</Text>
       <MasteryProgress {...summary} />
-    </Card>
-    <Card title="下一个">
       {hasOutline && <>
+        <Text accessibilityRole="header" style={styles.heading}>下一个</Text>
         {!!next.knowledge_point_name && <Text style={styles.heading}>{next.knowledge_point_name}</Text>}
         <Text style={styles.body}>{masteryNextLabels[next.action]}</Text>
       </>}
@@ -128,29 +135,47 @@ export default function MasteryPath() {
           openSession(existing?.session_id ?? "new", hasOutline ? "study" : "outline");
         }} />
     </Card>
-    {topic.learnerProfile && <LearnerProfileCard profile={topic.learnerProfile} />}
+    <ModelSetup />
+    <Card title="大纲"><MasteryOutline map={map} current={highlighted?.id ?? next.knowledge_point_id} onObjective={openObjective}
+      collapsible revealObjective={highlighted} objectiveRef={attachObjective} /></Card>
     {hasOutline && <ReviewPlan plan={topic.reviewPlan} busy={busy} locate={locateObjective} start={startReview}
       chooseStrategy={(id) => run(() => mastery.setReviewStrategy(pathId, id))}
       setRetention={(target) => run(() => mastery.setDesiredRetention(pathId, target))} />}
-    <Card title="大纲"><MasteryOutline map={map} current={highlighted ?? next.knowledge_point_id} onObjective={openObjective}
-      objectiveRef={(id, view) => { if (view) objectives.current.set(id, view); else objectives.current.delete(id); }} /></Card>
+    {(topic.goal && topic.goal !== topic.name || material.length > 0) && <Card title="目标与资料">
+      {topic.goal !== topic.name && !!topic.goal && <Text style={styles.body}>{topic.goal}</Text>}
+      {material.length > 0 && <View style={local.chips}>
+        {material.slice(0, 5).map(({ id, label }) => <Text key={id} style={local.chip}>{label}</Text>)}
+      </View>}
+    </Card>}
+    {topic.learnerProfile && <LearnerProfileCard profile={topic.learnerProfile} />}
     <Card title="学习会话">
       {topic.sessions.length === 0 && <Text style={styles.body}>暂无学习会话。</Text>}
-      {topic.sessions.map((session) => <View style={local.session} key={session.session_id}>
-        <Text style={styles.heading}>{session.mode ? masteryModeLabels[session.mode] : "精通会话"}</Text>
-        <Text style={styles.body}>{session.lastMessage || "还没有消息"}</Text>
-        <Text style={styles.body}>{new Date(session.updated_at * 1000).toLocaleString("zh-CN")}</Text>
-        <Action label={session.mode ? `打开${masteryModeLabels[session.mode]}会话` : "打开会话"}
-          onPress={() => openSession(session.session_id)} secondary />
-      </View>)}
+      {topic.sessions.map((session) => <Pressable style={local.session} key={session.session_id} accessibilityRole="button"
+        onPress={() => openSession(session.session_id)}>
+        <View style={local.summary}>
+          <StatusBadge label={session.mode ? masteryModeLabels[session.mode] : "精通会话"} />
+          <Text style={styles.body} numberOfLines={1}>{session.lastMessage || "还没有消息"}</Text>
+        </View>
+        <Text style={local.sessionTime}>{formatRelativeTime(session.updated_at)}</Text>
+        <Text style={local.chevron}>›</Text>
+      </Pressable>)}
       <Action label="＋ 新建学习会话" onPress={() => openSession("new", "study")} disabled={!hasOutline} secondary />
     </Card>
-    <Action label={more ? "收起更多" : "更多"} onPress={() => setMore((value) => !value)} secondary />
-    {more && <Card>
-      <Action label="重置进度" onPress={() => confirm("reset")} disabled={busy} secondary />
-      <Action label="删除主题" onPress={() => confirm("delete")} disabled={busy} secondary />
-    </Card>}
-    {error && !objective && <Text accessibilityRole="alert" style={local.error}>{error}</Text>}
+    {more && <ChatSheet title="管理精通之路" close={closeMenu} keyboard>
+      {name === undefined ? <ChatAction label="改名" onPress={() => setName(topic.name)} /> : <>
+        <TextInput accessibilityLabel="主题名称" value={name} onChangeText={setName} style={local.input} maxLength={240} />
+        <ChatAction label="保存名称" primary disabled={busy} onPress={() => run(async () => {
+          await mastery.renameTopic(pathId, name);
+          closeMenu();
+          await reload();
+        })} />
+        <ChatAction label="取消改名" onPress={() => { Keyboard.dismiss(); setName(undefined); setError(undefined); }} />
+      </>}
+      <ChatAction label="重置进度" onPress={() => confirm("reset")} disabled={busy} />
+      <ChatAction label="删除主题" onPress={() => confirm("delete")} disabled={busy} danger />
+      {error && <Text accessibilityRole="alert" style={local.error}>{error}</Text>}
+    </ChatSheet>}
+    {error && !objective && !more && <Text accessibilityRole="alert" style={local.error}>{error}</Text>}
     {objective && <ObjectiveEvidence key={objective} evidence={evidence} loadingError={evidenceError || error} busy={busy}
       close={() => { evidenceRequest.current++; setObjective(undefined); setError(undefined); }}
       setMastery={(mastered, note) => run(async () => {
@@ -165,8 +190,14 @@ export default function MasteryPath() {
 
 const local = StyleSheet.create({
   chips: { flexDirection: "row", flexWrap: "wrap", gap: spacing.xs },
-  chip: { color: colors.text, backgroundColor: colors.soft, paddingHorizontal: spacing.sm, paddingVertical: spacing.xs, borderRadius: 12 },
-  session: { borderBottomColor: colors.border, borderBottomWidth: 1, paddingBottom: spacing.sm, gap: spacing.xs },
-  input: { color: colors.text, borderColor: colors.border, borderWidth: 1, borderRadius: 8, padding: spacing.sm, fontSize: 16 },
+  chip: { color: colors.text, backgroundColor: colors.soft, paddingHorizontal: spacing.sm, paddingVertical: spacing.xs, borderRadius: radius.md },
+  session: { flexDirection: "row", alignItems: "center", gap: spacing.sm, borderBottomColor: colors.border,
+    borderBottomWidth: StyleSheet.hairlineWidth, paddingVertical: spacing.sm, minHeight: 48 },
+  summary: { flex: 1, minWidth: 0, gap: spacing.xs },
+  sessionTime: { color: colors.muted, fontSize: typography.caption },
+  chevron: { color: colors.muted, fontSize: 22 },
+  more: { minWidth: 44, minHeight: 44, justifyContent: "center", alignItems: "center" },
+  moreLabel: { color: colors.text, fontSize: 25, fontWeight: "700" },
+  input: { color: colors.text, borderColor: colors.border, borderWidth: 1, borderRadius: radius.sm, padding: spacing.sm, fontSize: 16 },
   error: { color: colors.danger },
 });

@@ -33,7 +33,7 @@ export function messageHandoffs(message: StoredMessage): MasteryHandoff[] {
 const string = { type: "string" };
 const path = { path_id: string };
 const opening = { opening_message: string, reason: string };
-const handoffHint = "已向学习者展示交接卡。简短说明会话里可以做什么，等待学习者选择。";
+const handoffHint = "交接卡已就绪。正文只写一句简短说明，省略内部 ID 和卡片已有信息，等待学习者选择。";
 
 function input(args: Record<string, unknown>, key: string, max = 2_000) {
   const value = args[key];
@@ -106,7 +106,7 @@ export function registerMasteryNavigation(runtime: PiDurableRuntime, store: AppS
       }
       const handoff: MasteryHandoff = { ...destination, path_id: pathId, path_name: summary.name, emoji: summary.emoji,
         mastered: summary.mastered, total: summary.total, percentage: summary.percentage, due_count: summary.dueCount,
-        opening_message: input(args, "opening_message"), reason: input(args, "reason", 160) };
+        opening_message: input(args, "opening_message"), reason: input(args, "reason", 64) };
       signal.throwIfAborted();
       onHandoff(handoff);
       return { ok: true, handoff, message: handoffHint };
