@@ -1,72 +1,60 @@
-# Learn Pace · M2 OpenSpec 竖切规划（V0.3）
+# Learn Pace · OpenSpec 竖切规划（V0.4）
 
-> 基线：M1（S1–S6）已全部真机通过（`7dce09c`、`c77ea75`；Release ARM64 APK 23.31 MiB、冷启动 214 ms、`pi-durable@1.6.0` 零补丁 + `pi-ai@1.6.0` 24 行补丁）。
-> 原则：按垂直业务切片拆分 Change，**每次只 propose 并落地当前 Change**，真机验收并 archive 后再生成下一个 Change 的详细 specs/tasks，避免预写过多导致规格漂移。
-> 方向（2026-11-25）：以「打开应用即是 DeepTutor 的手机版」为目标，按 [DeepTutor 手机版复刻方案](../docs/evaluation/deeptutor-mobile-parity-plan-v0.3.md) 调整 Change 2–6。PRD、路线图与下表各 Change 的规格均已按方案更新（`openspec validate --all --strict` 通过）；Change 3′–6′ 实施前仍以 S7 结论复核。
+> 基线：M1（S1–S6，`c77ea75`）、S7 导师循环（`GO`）、M2-A 全部 6 个 Change + 两轮移动体验打磨（`refine-mobile-learning-experience`、`m2a-mobile-ux-polish`）以及 M2-B 全部 3 个加固 Change（Change 7–9）均已完成并归档。
+> 方向（2026-11-26 · V0.4）：在过完 **M3（AC-08）真机发布门禁并锁定 Release 基线** 后，进入 **M2-C（V0.4）**：聚焦本地复习提醒、问答自测（LF01-05）、错题回看与轻量知识卡；语音输入交由系统中文输入法，多源资料输入继续按 D7 冻结待专项调研。
 
-## 一、M2-A · 双流程主流程快速实现（无事务控制版）
+## 一、已完成里程碑（M2-A & M2-B · 全部归档）
 
-按决策 D3，M2-A 全部 Change 均采用顺序落库，**不引入** SQLite 事务控制、大纲版本 CAS、严格 `submission_id` 幂等与故障注入对账（统一留到 M2-B）。首期模型仅需确保 **DeepSeek Flash** 接入（D5）。
+| 阶段 | Change ID | 核心能力 | 状态 |
+| --- | --- | --- | --- |
+| **M2-A** | `m2a-app-shell-and-storage`、`m2a-lf01-chat-and-little-tutor`、`m2a-mastery-topics-and-outline`、`m2a-mastery-study-session`、`m2a-mastery-review`、`m2a-learning-home-and-shell` | 4 Tab 壳体与 SQLite、问答与小老师、精通之路（大纲/学习/复习三模式）、学习首页与聊天交接卡 | ✅ 全部归档 |
+| **M2-A 打磨** | `refine-mobile-learning-experience`、`m2a-mobile-ux-polish` | 原生渲染选区、题卡焦点提交栏、搜索、4 Tab 图标、减噪重排、工具实时进度与证据弹层 | ✅ 全部归档 |
+| **M2-B** | `m2b-transactions-and-idempotency`（7）、`m2b-crash-recovery-and-clock`（8）、`m2b-backup-and-restore`（9） | SQLite v5 事务与写入队列、统一 CAS 与幂等、冷启动全局与题组对账、故障注入与时钟回归、7 表一致快照备份与原子恢复 | ✅ 全部归档 |
 
-| 顺序 | Change ID | 负责能力（Capabilities） | 覆盖页面 / 包 | 验收基线 | 当前状态 |
-|---|---|---|---|---|---|
-| **1** | `m2a-app-shell-and-storage` | `app-navigation`、`local-storage`、`model-settings` | P00、P07、4 Tab 骨架；`packages/infra`、`packages/app-host`、`apps/mobile` | 应用 4 Tab 可切、P00 场景可设可跳过、P07 DeepSeek Flash 可配置测试与重启保留、SQLite 全量核心表就绪 | **真机验收通过，[已归档](changes/archive/2026-11-24-m2a-app-shell-and-storage/)**；Tab 改名、默认页与移除 P00 由 Change 2 以 MODIFIED / REMOVED 提交 |
-| **S7** | 技术验证（不建 Change） | 导师多工具循环 | `packages/runtime`、`packages/app-host`、`apps/mobile` 调试页 | DeepSeek Flash 在真机稳定驱动 `mastery_status` / `build` / `quiz` / `grade` / `mode` | **通过（GO）**，[验收报告](../docs/evaluation/s7-tutor-loop-verification-report.md) |
-| **2** | `m2a-lf01-chat-and-little-tutor` | `lf01-chat`、`little-tutor-threads`、`app-visual-identity`；修改 `app-navigation`、`model-settings`、`local-storage` | P02 问答、小老师侧聊、添加到对话框、转为学习目标；4 Tab 改名与默认「问答」、移除 P00、DeepTutor 主题与文案、Markdown/公式渲染 | **AC-01、AC-02** | **真机验收通过，[已归档](changes/archive/2026-11-25-m2a-lf01-chat-and-little-tutor/)** |
-| **3′** | `m2a-mastery-topics-and-outline`（替代 `m2a-lf02-goal-and-outline`） | `mastery-topics`、`mastery-session`、`mastery-outline` | 精通之路列表、新建向导、路径页基础版、精通会话骨架与编辑大纲模式；`interactions` 支持 `abandoned` | **AC-03** | **AC-03 真机验收通过，[已归档](changes/archive/2026-11-25-m2a-mastery-topics-and-outline/)** |
-| **4′** | `m2a-mastery-study-session`（替代 `m2a-lf02-study-and-assessment`） | `mastery-question-cards`、`mastery-assessment`、`mastery-study-mode`、`mastery-objective-evidence` | 学习模式、题卡、评分管线与语义判定、作废与更正、自报掌握、证据抽屉、升级庆祝 | **AC-04** | **AC-04 真机验收通过，[已归档](changes/archive/2026-11-25-m2a-mastery-study-session/)** |
-| **5′** | `m2a-mastery-review`（替代 `m2a-lf02-review-loop`） | `mastery-review` | 复习模式、复习入口与开场消息、复习计划面板、开发时钟 | **AC-06** | **AC-06 真机验收通过，[已归档](changes/archive/2026-11-25-m2a-mastery-review/)** |
-| **6′** | `m2a-learning-home-and-shell`（替代 `m2a-home-projections-and-polish`） | `learning-home`、`mastery-handoff`；修改 `lf01-chat` | 学习首页、聊天交接卡、跨页一致、全链路走查 | M2-A 里程碑 | **M2-A 全链路真机走查通过，[已归档](changes/archive/2026-11-25-m2a-learning-home-and-shell/)** |
+---
 
-### 依赖关系图
+## 二、阶段 0：M3 发布基线与 V0.4 范围决策（进入 M2-C 前置）
+
+1. **M3（AC-08）真机发布验收已完成**。在 Android ARM64 真机（`86ceabbf`）完成 AC-01–08 走查。Release APK 为 38,843,754 字节，冷启动中位数为 225 ms。后续新增原生模块以此为比较基线。[真机记录](../apps/mobile/README.md)
+2. **V0.4 范围决策表（已同步至 PRD `00 / 03 / 08 / 09` 与 `openspec/config.yaml` D9）**：
+   - 本地复习提醒：纳入（Change 10，`expo-notifications`）；
+   - 问答自测（LF01-05）：纳入（Change 11，Host 直接 JSON 生成，存入 `messages.metadata`，零掌握度副作用）；
+   - 笔记本能力：局部放开（Change 12，只做只读错题回看 + `knowledge_cards` 轻量知识卡，不做重型编辑器）；
+   - 语音作答：不自研，依托 Android 系统中文输入法（讯飞/搜狗等），验收时实测；
+   - 多源资料（PDF/识图/网页）：继续按 D7 冻结，待专项调研后再规划。
+
+---
+
+## 三、M2-C · V0.4 留存、自测与资产沉淀（Change 10–12）
+
+| 顺序 | Change ID | 负责能力（Capabilities） | 覆盖范围 | 验收基线 | 当前状态 |
+| --- | --- | --- | --- | --- | --- |
+| **10** | `m2c-review-reminders` | `review-reminders` | `packages/domain` 纯排程函数、`packages/app-host` 提醒服务、`apps/mobile` `expo-notifications` + 通知渠道 + 深链跳转 +「我的」提醒设置 | **AC-09** | M3 已通过，可实施 |
+| **11** | `m2c-chat-quick-check` | `chat-quick-check` | 小验证脚本（DeepSeek Flash JSON 出题）、Host 直接出题与评分（复用 `semantic-assessment`）、消息 `metadata` 持久化、`QuestionCard` 子部件复用 | **AC-10** | 规格已建，小验证可与 Change 10 并行 |
+| **12** | `m2c-mistakes-and-knowledge-cards` | `mistake-review`、`knowledge-cards`；修改 `local-storage`、`local-backup-restore`、`mastery-topics` | 3a 只读错题回看（`learning_evidence ∩ interactions` + 自测错题）；3b `knowledge_cards`（SQLite v6、8 表备份 + v5 兼容恢复、收藏与搜索、向导作 `text_note`）；系统输入法语音与阶段 4 全链路整合验收 | **AC-11、AC-12** | 规格已建，建议在 Change 10 归档后 apply |
+
+### 依赖与并行关系
 
 ```text
-Change 1 (m2a-app-shell-and-storage, 已归档)
-   ├──► Change 2 (m2a-lf01-chat-and-little-tutor, 修订) ─────────────┐
-   └──► S7 导师循环验证                                              │
-           └──► Change 3′ (m2a-mastery-topics-and-outline)           │
-                   └──► Change 4′ (m2a-mastery-study-session)        │
-                           └──► Change 5′ (m2a-mastery-review)       │
-                                   └──► Change 6′ (learning-home) ◄──┘
+M2-B 全部归档 --> 阶段 0: M3 (AC-08 Release 基线) + V0.4 范围决策
+                     |
+                     +--> Change 10 (m2c-review-reminders) -----------------------+
+                     |                                                            |
+                     +--> [并行] Change 11 小验证 --> Change 11 (chat-quick-check) +--> Change 12 (mistakes & knowledge-cards, SQLite v6 + 阶段4整合)
 ```
 
-Change 2 的 runtime `instructions` / `history`、消息状态规则与 `MessageContent` 渲染组件被 Change 3′ 起的精通会话复用；聊天中的交接卡需要路径与会话存在，放在 Change 6′。Change 6′ 对 `lf01-chat` 的修改要求 Change 2 先归档。
-
-### 评审决议
-
-**2026-11-25（第一轮）**
-- **复习失败口径**：复习作答与学习作答走同一评分管线（移植 DeepTutor `_apply_grade` / `record_qualitative_in_memory`），复习独立答错会记录失误与错因、掌握度回落、知识点回到学习中、已完成路径回到学习中；重新达标即补救完成，知识点带失误历史回到复习计划。已写入 PRD 04 §6.3。
-- **调度起点**：与上游一致，从首次评分起维护复习状态；复习计划只显示已掌握知识点。
-- **待排期项**：LF01-05「可选理解验证」，后续参照 DeepTutor「主动提问」实现，不计入掌握度。
-
-**2026-11-25（第二轮，复刻方向）**：4 Tab 改为「学习 / 问答 / 精通之路 / 我的」并默认打开「问答」；先修关系不强制拦截；删除题卡提示按钮与复习结算页；已确认大纲在 M2-A 可修订；加入自报掌握；移除 P00 学习场景。详见[复刻方案 §2.3](../docs/evaluation/deeptutor-mobile-parity-plan-v0.3.md)。
+> 说明：3a 错题回看为纯只读投影，不改 Schema；3b 知识卡涉及 SQLite v6 与备份 7→8 表升级，放在 Change 10（修改 `settings` 提醒配置）之后单独实施，避免与 `settings`/备份变更交叉冲突。
 
 ---
 
-## 二、M2-B · 一致性与恢复加固（M2-A 主流程跑通后再 propose）
+## 四、可选提案：移动端 Skill 与 ima 知识库（待评审）
 
-| 顺序 | Change ID | 范围 | 验收基线 |
-|---|---|---|---|
-| **7** | `m2b-transactions-and-idempotency` | 评分写入与大纲修订提交的原子短事务、大纲版本 CAS、`submission_id` 幂等去重、`mastery_repair_question` 作废重算的事务化 | NFR-02、NFR-03、AC-05 |
-| **8** | `m2b-crash-recovery-and-clock` | 启动时异常状态对账（`interrupted` / `awaiting_input` / `answered` / `graded`）、Host 故障注入测试套件、可控时钟复习回归 | NFR-04、AC-05、AC-06 |
-| **9** | `m2b-backup-and-restore` | 数据库一致性快照 + manifest 校验（默认不含凭据）、恢复预览、失败保留原数据 | AC-07 |
+不替换上方已实施的 Change 10–12，也不改变 P0 学习闭环。产品需求与独立验收编号见 [PRD 10：移动端 Skill 管理与 ima 知识库](../docs/prd/10-mobile-skills-and-ima-knowledge.md)，技术设计参见 [移动端 Skill 与 ima 扩展设计 V0.4](../docs/evaluation/mobile-skill-ima-extension-plan-v0.4.md)。
 
----
+| Change ID | 范围 | Gate |
+|---|---|---|
+| [m2c-mobile-skill-management](changes/m2c-mobile-skill-management/proposal.md) | 移动端 Skill 导入/管理/作用域/按需加载、LF01、小老师、备份安全 | 自定义教学 Skill 真机闭环 + 原 M2-B 回归 |
+| m2c-ima-knowledge-lf01 | 通用 KnowledgeProvider、ima 只读连接/检索/原文/引用、移动兼容 Skill | 真实库真机验证、无独立业务后端、无凭据泄漏 |
+| m2c-knowledge-mastery | 路径资料绑定、Outline/Study/Review | 资料证据与学习证据分离，原评分/复习/恢复门禁不退化 |
 
-## 三、M2-C · 可选 Skill 与外部知识库扩展（待评审）
-基于当前 M2-A/M2-B 代码与归档，不改变 P0 学习闭环；产品需求与独立验收编号见 [PRD 10：移动端 Skill 管理与 ima 知识库](../docs/prd/10-mobile-skills-and-ima-knowledge.md)，技术设计参见 [移动端 Skill 与 ima 扩展设计 V0.4](../docs/evaluation/mobile-skill-ima-extension-plan-v0.4.md)。
-
-| 顺序 | Change ID | 范围 | Gate |
-|---|---|---|---|
-| 10 | [m2c-mobile-skill-management](changes/m2c-mobile-skill-management/proposal.md) | 移动端 Skill 导入/管理/作用域/按需加载、LF01、小老师、备份安全 | 自定义教学 Skill 真机闭环 + 原 M2-B 回归 |
-| 11 | m2c-ima-knowledge-lf01 | 通用 KnowledgeProvider、ima 只读连接/检索/原文/引用、移动兼容 Skill | 真实库真机验证、无独立业务后端、无凭据泄漏 |
-| 12 | m2c-knowledge-mastery | 路径资料绑定、Outline/Study/Review | 资料证据与学习证据分离，原评分/复习/恢复门禁不退化 |
-
-仅第10项 propose 详细 change；第11/12项待前一项验收归档后再生成 specs/tasks。不引入市场、脚本执行器、云同步或本地重型 RAG。
-
----
-
-## 四、协作方式（配合 Herdr + Codex）
-1. 在主会话评审当前 OpenSpec Change（`openspec/changes/<change-id>/` 下的 `proposal.md`、`specs/`、`design.md`、`tasks.md`）。
-2. 确认无误后，让 Codex 按 `tasks.md` 逐项实施并跑通 `corepack pnpm typecheck`、`corepack pnpm test` 与 Android 真机检查。
-3. 验收通过后归档该 Change（将 delta specs 同步进 `openspec/specs/`），再 propose 下一个 Change。
+仅 Skill 管理项已有详细 change；ima 与知识掌握待前一项验收归档后再生成 specs/tasks。不引入市场、脚本执行器、云同步或本地重型 RAG。
