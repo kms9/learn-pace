@@ -53,7 +53,20 @@ Change 2 的 runtime `instructions` / `history`、消息状态规则与 `Message
 
 ---
 
-## 三、协作方式（配合 Herdr + Codex）
+## 三、M2-C · 可选 Skill 与外部知识库扩展（待评审）
+基于当前 M2-A/M2-B 代码与归档，不改变 P0 学习闭环；参见 [移动端 Skill 与 ima 扩展设计 V0.4](../docs/evaluation/mobile-skill-ima-extension-plan-v0.4.md)。
+
+| 顺序 | Change ID | 范围 | Gate |
+|---|---|---|---|
+| 10 | [m2c-mobile-skill-management](changes/m2c-mobile-skill-management/proposal.md) | 移动端 Skill 导入/管理/作用域/按需加载、LF01、小老师、备份安全 | 自定义教学 Skill 真机闭环 + 原 M2-B 回归 |
+| 11 | m2c-ima-knowledge-lf01 | 通用 KnowledgeProvider、ima 只读连接/检索/原文/引用、移动兼容 Skill | 真实库真机验证、无独立业务后端、无凭据泄漏 |
+| 12 | m2c-knowledge-mastery | 路径资料绑定、Outline/Study/Review | 资料证据与学习证据分离，原评分/复习/恢复门禁不退化 |
+
+仅第10项 propose 详细 change；第11/12项待前一项验收归档后再生成 specs/tasks。不引入市场、脚本执行器、云同步或本地重型 RAG。
+
+---
+
+## 四、协作方式（配合 Herdr + Codex）
 1. 在主会话评审当前 OpenSpec Change（`openspec/changes/<change-id>/` 下的 `proposal.md`、`specs/`、`design.md`、`tasks.md`）。
 2. 确认无误后，让 Codex 按 `tasks.md` 逐项实施并跑通 `corepack pnpm typecheck`、`corepack pnpm test` 与 Android 真机检查。
 3. 验收通过后归档该 Change（将 delta specs 同步进 `openspec/specs/`），再 propose 下一个 Change。
