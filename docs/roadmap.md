@@ -13,8 +13,9 @@
 | S7 导师循环验证 | 移植 `mastery_status`、`mastery_build`、`mastery_quiz`、`mastery_grade`、`mastery_mode` 与精简中文导师提示词，在 Android 真机用 DeepSeek Flash 跑通「建大纲 → 讲解 → 出题 → 批改」 | 10 次以上完整循环中工具名与参数合法率、出题收尾正确率、首字延迟与单轮 token 成本达到验证前约定的阈值；不通过则评审「Host 决定工具调用」的备选方案 |
 | M2-A 主流程实现 | 问答与小老师、精通之路列表与向导、精通会话（编辑大纲 / 学习 / 复习）、题卡与评分、路径页、学习首页与 DeepTutor 视觉文案（暂不启用复杂事务控制） | LF01/LF02 主链路端到端可跑通，AC-01–04、AC-06 主路径验证通过 |
 | M2-B 加固与恢复 | 补齐关键写入原子事务、大纲版本 CAS、`submission_id` 幂等、作废重算、故障注入、可控时钟与备份恢复 | AC-01–07 自动化和人工测试全量通过，满足 NFR-02/03/04 |
+| M2-C 可选扩展（P1，待评审） | Skill 管理与 Runtime（10）→ ima 知识库问答（11）→ 精通之路资料集成（12） | [PRD 10 的 AC-M2C 验收](prd/10-mobile-skills-and-ima-knowledge.md#11-验收矩阵及发布-gate)，不改变 P0 发布门禁；按 OpenSpec 逐项验收归档 |
 | M3 MVP 交付 | Android 发布、安全、备份、性能与兼容；更多模型扩展与 iOS 视后续节奏推进 | AC-08 真机验收，无额外 Python/FastAPI 业务服务 |
 
-当前：M2-A Change 1（应用壳与存储）已归档；PRD 已按 V0.3 方向更新，OpenSpec Change 2–6 待按复刻方案修订或重写。后续扩展多模型、课程包、资料解析/RAG、DeepTutor 其他学习形态、市场与跨设备同步，另行立项。
+当前（2026-11-26）：M1/S7 与 M2-A 已有真机验收记录，M2-B 已有代码与归档规格；具体实施进展以 [OpenSpec 路线](../openspec/ROADMAP.md) 和归档为准。M2-C 当前仅 Change 10 已 propose，11/12 待上一项验收归档后展开。多模型、课程包、完整本地 RAG、DeepTutor 其他学习形态、市场与跨设备同步仍另行立项。
 
 [PRD](prd/README.md) · [验收](prd/09-acceptance-criteria.md) · [复刻方案](evaluation/deeptutor-mobile-parity-plan-v0.3.md) · [源码对照](evaluation/deeptutor-learn-pace-source-comparison-v0.2.md) · [可行性与实施方案](evaluation/feasibility-and-plan-v0.2.md)

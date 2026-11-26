@@ -35,3 +35,7 @@ P0 不设学习场景（学段）选择。学段、学科、教材版本属于 P
 
 ## V0.3 对齐
 4 Tab 名称、默认页与移除 P00 依据[复刻方案 §2.3](../evaluation/deeptutor-mobile-parity-plan-v0.3.md) 决定 A、F。V0.2 原型 D09、D10 中的首页统计、场景选择不再作为基线。
+
+## V0.4 M2-C 增量（P1，待评审）
+
+不新增 Tab：P07「我的」新增技能管理与知识库管理子页面；P02 问答/Dito composer 增加独立 Skill 与知识库选择及引用详情；P04/P05/P06 在 Change 12 增加资料范围与来源展示。具体子页面 ID、入口、状态、切片归属及交互约束见 [PRD 10 §4](10-mobile-skills-and-ima-knowledge.md#4-信息架构与界面需求)。

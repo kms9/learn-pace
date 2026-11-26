@@ -18,6 +18,9 @@
 | [07](07-data-flow.md) | 命令、回执、数据流 |
 | [08](08-local-persistence.md) | 数据库、备份和恢复 |
 | [09](09-acceptance-criteria.md) | AC-01–08 |
+| [10](10-mobile-skills-and-ima-knowledge.md) | V0.4 M2-C：Skill 管理、Runtime、ima 知识库、LF01/LF02 集成与 AC-M2C 验收 |
+
+**V0.4 增量（2026-11-26，待评审）**：新增 [M2-C 产品需求文档](10-mobile-skills-and-ima-knowledge.md)，将 Skill 管理与 ima 作为首个外部知识库扩展纳入 P1；保留 P0 原规则与 AC-01–08，不提前 propose Change 11/12。产品需求见 PRD 10，架构见 [V0.4 技术方案](../evaluation/mobile-skill-ima-extension-plan-v0.4.md)，当前实施见 [OpenSpec 路线](../../openspec/ROADMAP.md)。历史 V0.2 状态描述不代表最新代码状态；实施进展以归档与路线为准。
 
 ## 决策与来源
 

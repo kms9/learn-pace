@@ -1,7 +1,7 @@
 # Proposal
 
 ## Why
-当前 LF01/LF02 已有运行时与本地业务闭环。教学指令仍硬编码，缺少可维护的 Skill 生命周期；后续需用 ima 验证外部知识来源接入。参考 Cherry Studio Mobile 固定子模块，先建立通用、移动端安全的 Skill 管理和回合装配，再接入第一个 provider。详见 [M2-C 设计](../../../docs/evaluation/mobile-skill-ima-extension-plan-v0.4.md)。
+当前 LF01/LF02 已有运行时与本地业务闭环。教学指令仍硬编码，缺少可维护的 Skill 生命周期；后续需用 ima 验证外部知识来源接入。参考 Cherry Studio Mobile 固定子模块，先建立通用、移动端安全的 Skill 管理和回合装配，再接入第一个 provider。产品范围与需求 ID（SKM/SKR、EXT-NFR、AC-M2C-10）见 [PRD 10](../../../docs/prd/10-mobile-skills-and-ima-knowledge.md)；详见 [M2-C 设计](../../../docs/evaluation/mobile-skill-ima-extension-plan-v0.4.md)。
 
 ## What Changes
 - 「我的→技能」：导入 SKILL.md / ZIP / 公开 GitHub 链接、预览/安装/更新/卸载、详情与兼容性、启用与流程绑定。

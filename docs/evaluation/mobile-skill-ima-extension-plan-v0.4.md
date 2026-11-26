@@ -2,6 +2,8 @@
 
 2026-11-26 · 基线：`docs/feasibility-plan` @ `2dd856df55cbc95f6e57e650a5c94c4feb07e141`。本稿是 M2-C 待评审增量，不宣称已实现，不回改已归档 Change 或 D1–D8；P0 仍为无外部知识库也可运行的 LF01/LF02，Skill/ima 是可选增强（P1）。Android ARM64 / Expo 58 / RN 0.88.1 / Hermes / Pi Durable 1.6.0 保持不变。
 
+产品需求、使用场景与独立验收矩阵见 [PRD 10：移动端 Skill 管理与 ima 知识库扩展](../prd/10-mobile-skills-and-ima-knowledge.md)。本文继续作为技术设计及源码迁移依据。
+
 ## 1. 为什么现在做、范围与基线差异
 
 当前分支已有 apps/mobile、packages/{domain,app-host,runtime,infra}，M1/S7 与 M2-A 真机验证记录、M2-B 事务/恢复/备份代码与归档规格。README 部分状态描述仍早于代码；以当前源码、OpenSpec 与归档验收记录为准，不据此声称本次重新跑过真机。现有 Runtime 每轮重建 Harness（MemoryStorage），本地业务存储才是历史权威；不替换 Pi、不复制 Cherry 的整个 Agent 管理系统。新增 Skill 包、连接和引用都不改变掌握度算法、评分事务或导航四 Tab。

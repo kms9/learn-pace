@@ -54,7 +54,7 @@ Change 2 的 runtime `instructions` / `history`、消息状态规则与 `Message
 ---
 
 ## 三、M2-C · 可选 Skill 与外部知识库扩展（待评审）
-基于当前 M2-A/M2-B 代码与归档，不改变 P0 学习闭环；参见 [移动端 Skill 与 ima 扩展设计 V0.4](../docs/evaluation/mobile-skill-ima-extension-plan-v0.4.md)。
+基于当前 M2-A/M2-B 代码与归档，不改变 P0 学习闭环；产品需求与独立验收编号见 [PRD 10：移动端 Skill 管理与 ima 知识库](../docs/prd/10-mobile-skills-and-ima-knowledge.md)，技术设计参见 [移动端 Skill 与 ima 扩展设计 V0.4](../docs/evaluation/mobile-skill-ima-extension-plan-v0.4.md)。
 
 | 顺序 | Change ID | 范围 | Gate |
 |---|---|---|---|
