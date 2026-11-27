@@ -1,0 +1,31 @@
+schema: spec-driven
+
+context: |
+  Language: zh-CN
+  All artifacts must be written in zh-CN.
+  Keep OpenSpec structural headings and SHALL/MUST keywords in English.
+
+  Project: Learn Pace (local-first mobile personalized learning agent, P0 = LF01 + LF02, Android ARM64 first).
+  Tech stack: pnpm monorepo (corepack pnpm), Expo 58 + React Native 0.88.1 (Hermes), TypeScript strict, Vitest, expo-sqlite (WAL), expo-secure-store, @earendil-works/pi-durable@1.6.0 + @earendil-works/pi-ai@1.6.0.
+  Frozen decisions (D1-D7):
+  - D1: Open-source with explicit author permission to reuse Cherry Studio Mobile code/design.
+  - D2 & D4: Latest Pi Durable (1.6.0) as Agent Runtime; domain rules remain pure TS in @learn-pace/domain.
+  - D3: M2-A rapid main-flow phase does NOT use SQLite transaction/CAS/idempotency locks; those are added in M2-B hardening.
+  - D5: P0 only requires DeepSeek Flash (openai-completions, streaming + tool calling + JSON); never commit .env or API keys.
+  - D7 (revised 2026-11-25): 4 Tabs (学习/问答/精通之路/我的), default tab 问答; no P00 learning-scene selection; learner self-reported mastery is supported as in DeepTutor (separate source, no assessed evidence, reversible); review failure follows DeepTutor service/scheduler (independent review failure drops mastery back to learning/remediation while preserving history; assisted answers preserve mastery with 0.6 quality cap); no answer-hint button and no review settlement page; text & quote attachments only in P0.
+  - D8 (2026-11-25): Product goal is "DeepTutor on a phone". Replicate DeepTutor 1284116 chat + Mastery Path interaction, tutor tool loop (mastery_* tools gated by session mode outline/study/review), terminology (web/locales/zh/app.json) and visual theme. Upstream reference: upstream/deeptutor. Plan: docs/evaluation/deeptutor-mobile-parity-plan-v0.3.md.
+  - D9 (V0.4, 2026-11-26): After M2-B & M3 AC-08 release baseline, scope expands strictly to (1) local review reminders via expo-notifications, (2) chat quick-check (LF01-05) generated directly as JSON by Host and stored in messages.metadata (zero mastery impact), (3) read-only mistake review + lightweight knowledge_cards (SQLite v6, usable as text_note in wizard; no heavy notebook editor). Voice input relies on Android system IME (no custom voice module); multi-source materials (PDF/image/web) remain frozen per D7 pending research.
+  - D10 (V0.5 / M2-D, 2026-11-26): After M2-C (Change 10-12) is archived, the read-only knowledge integration sequence is Change 13 (`m2d-mobile-skill-management`, SQLite v6->v7, backup `format_version: 2` with backward-compatible v1 schema 5/6 restore, pure-JS deps `yaml`, `fflate`, `@noble/hashes` with zero new native Android modules), real-account IMA/COS PoC, Change 14a (`m2d-ima-knowledge-lf01`) and then Change 15 (`m2d-knowledge-mastery`). Change 14b is a separate controlled-upload proposal that depends on PRD requirements and acceptance criteria.
+  - D11 (V0.5 / Change 14a, 2026-11-26): Change 14a (`m2d-ima-knowledge-lf01`) delivers read-only IMA integration and cited Q&A for LF01 and Dito. It reads authorized IMA notes via `get_doc_content` and supported text via guarded COS HTTPS (`<= 5 MiB`). The PoC (`docs/evaluation/ima-openapi-poc-report-v0.5.md`) verified note, Markdown and CSV reads and confirmed title-based discovery followed by a separate read. PDF/Word/WeChat and rejected subscribed-library items report unavailable content. SQLite v7->v8 (`provider_connections`, `source_bindings`), backup `format_version: 2` / `schema_version: 8` (13 tables, zero credentials, explicit reconnect on restore), zero new native Android modules. Change 14b is reserved for explicit user-triggered file upload and URL import from the knowledge-library management screen, with dedicated PRD acceptance and an independent write provider. Chat tools remain read-only.
+  Architecture boundaries:
+  - packages/domain: pure TS rules (no RN/Expo/Pi/SQLite imports).
+  - packages/runtime: AgentRuntime port + PiDurableRuntime adapter.
+  - packages/infra: SQLite / SecureStore / Clock adapters.
+  - packages/app-host: Commands, Turn Coordinator, projections.
+  - apps/mobile: UI & navigation only; dispatches commands to app-host and renders projections.
+
+rules:
+  proposal:
+    - Always state explicit Non-Goals / Out of Scope (especially keeping M2-B transaction/CAS/backup hardening out of M2-A changes).
+  tasks:
+    - Group tasks into small verifiable steps with explicit package paths and test/typecheck verification commands (use `corepack pnpm`).

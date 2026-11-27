@@ -1,0 +1,23 @@
+{
+  "name": "@learn-pace/infra",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "scripts": {
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@learn-pace/domain": "workspace:*"
+  },
+  "peerDependencies": {
+    "expo-sqlite": "58.0.15",
+    "expo-secure-store": "58.0.2"
+  },
+  "exports": {
+    ".": "./src/index.ts",
+    "./expo": "./src/expo.ts",
+    "./testing": "./src/testing/fault-store.ts"
+  }
+}

@@ -1,14 +1,21 @@
-# Learn Pace 实施路线（V0.2）
+# Learn Pace 实施路线（V0.3）
 
 按 Gate 推进，不预估未经评审的工期。P0 范围仅 LF01/LF02。
 
+已确认工程与产品基线（2026-11-24）：项目开源并获 Cherry Studio App 作者明确授权可直接复用其可用代码与设计；Agent Runtime 主选最新版 Pi Durable；首期模型仅需确保 DeepSeek Flash 接入（OpenAI-completions 兼容，支持 streaming / tool calling / JSON）；快速推进期暂不使用事务控制，完成主要业务流程后再补齐事务/CAS/幂等与恢复加固；首期附件仅支持文本与选文。详见[可行性评估与实施方案](evaluation/feasibility-and-plan-v0.2.md)。
+
+**V0.3 方向（2026-11-25）**：产品目标调整为「打开应用即是 DeepTutor 的手机版」。LF02 从页面工作台改为导师驱动的精通会话；4 Tab 改为「学习 / 问答 / 精通之路 / 我的」并默认打开「问答」；移除学习场景选择；提供自报掌握；复习在会话中进行，不设结算页；已确认大纲可在 M2-A 修订。详见[DeepTutor 手机版复刻方案](evaluation/deeptutor-mobile-parity-plan-v0.3.md)。
+
 | 阶段 | 主要交付 | 进入下一阶段的门槛 |
 | --- | --- | --- |
-| M0 基线冻结 | 确认 PRD V0.2、4 Tab、页面状态、学习策略、异常交互及证据/复习合同 | 需求→页面→命令→状态→验收可追踪；冻结待决项 |
-| M1 技术验证 | Expo + Pi Durable 候选 Runtime + SQLite；Android ARM64 APK，外部模型及结构化题卡 | 真机完成问答→出题→落库→杀进程→恢复原题→评分→事务→UI 同步；确认依赖/许可 |
-| M2 双流程实现 | LF01/LF02、Learning Domain、本地持久化与恢复 | AC-01–07 自动化和人工测试通过，故障注入、可控时钟、幂等与 CAS |
-| M3 MVP 交付 | Android 发布、安全、备份、性能与兼容；iOS 视验证结果 | AC-08 真机验收，无额外 Python/FastAPI 业务服务 |
+| M0 基线冻结 | 冻结 PRD V0.2、D1–D7 决策及 `packages/domain` 类型契约 | 已完成 |
+| M1 技术验证 | Expo + 最新版 Pi Durable + SQLite + DeepSeek Flash；Android ARM64 APK 与领域核心对照测试 | 已完成（S1–S6 真机通过） |
+| S7 导师循环验证 | 移植 `mastery_status`、`mastery_build`、`mastery_quiz`、`mastery_grade`、`mastery_mode` 与精简中文导师提示词，在 Android 真机用 DeepSeek Flash 跑通「建大纲 → 讲解 → 出题 → 批改」 | 10 次以上完整循环中工具名与参数合法率、出题收尾正确率、首字延迟与单轮 token 成本达到验证前约定的阈值；不通过则评审「Host 决定工具调用」的备选方案 |
+| M2-A 主流程实现 | 问答与小老师、精通之路列表与向导、精通会话（编辑大纲 / 学习 / 复习）、题卡与评分、路径页、学习首页与 DeepTutor 视觉文案（暂不启用复杂事务控制） | LF01/LF02 主链路端到端可跑通，AC-01–04、AC-06 主路径验证通过 |
+| M2-B 加固与恢复 | 补齐关键写入原子事务、大纲版本 CAS、`submission_id` 幂等、作废重算、故障注入、可控时钟与备份恢复 | AC-01–07 自动化和人工测试全量通过，满足 NFR-02/03/04 |
+| M2-C 可选扩展（P1，待评审） | Skill 管理与 Runtime（10）→ ima 知识库问答（11）→ 精通之路资料集成（12） | [PRD 10 的 AC-M2C 验收](prd/10-mobile-skills-and-ima-knowledge.md#11-验收矩阵及发布-gate)，不改变 P0 发布门禁；按 OpenSpec 逐项验收归档 |
+| M3 MVP 交付 | Android 发布、安全、备份、性能与兼容；更多模型扩展与 iOS 视后续节奏推进 | AC-08 真机验收，无额外 Python/FastAPI 业务服务 |
 
-当前：M0 设计评审，已有主路径与关键状态原型，可开展 M1 PoC；未完成工程实现。后续扩展课程包、资料解析/RAG、游戏、市场与跨设备同步，另行立项。
+当前（2026-11-26）：M1/S7 与 M2-A 已有真机验收记录，M2-B 已有代码与归档规格；具体实施进展以 [OpenSpec 路线](../openspec/ROADMAP.md) 和归档为准。M2-C 当前仅 Change 10 已 propose，11/12 待上一项验收归档后展开。多模型、课程包、完整本地 RAG、DeepTutor 其他学习形态、市场与跨设备同步仍另行立项。
 
-[PRD](prd/README.md) · [验收](prd/09-acceptance-criteria.md) · [闭环复评](evaluation/learning-loop-review-v0.2.md)
+[PRD](prd/README.md) · [验收](prd/09-acceptance-criteria.md) · [复刻方案](evaluation/deeptutor-mobile-parity-plan-v0.3.md) · [源码对照](evaluation/deeptutor-learn-pace-source-comparison-v0.2.md) · [可行性与实施方案](evaluation/feasibility-and-plan-v0.2.md)

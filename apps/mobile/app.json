@@ -1,0 +1,29 @@
+{
+  "expo": {
+    "name": "Learn Pace",
+    "slug": "learn-pace",
+    "scheme": "learnpace",
+    "version": "0.1.0",
+    "orientation": "portrait",
+    "jsEngine": "hermes",
+    "android": {
+      "package": "app.learnpace.m1"
+    },
+    "plugins": [
+      ["expo-dev-client", {"launchMode": "most-recent"}],
+      "expo-secure-store",
+      "expo-router",
+      ["expo-notifications", {
+        "icon": "./assets/review-notification.png",
+        "color": "#b0501e",
+        "defaultChannel": "review-reminders"
+      }],
+      ["expo-build-properties", {
+        "android": {
+          "buildArchs": ["armeabi-v7a", "arm64-v8a", "x86", "x86_64"],
+          "extraProguardRules": "# Enriched Markdown creates and configures display math views by reflection.\n-keep class com.swmansion.enriched.markdown.segments.MathContainerView {\n    public <init>(android.content.Context, com.swmansion.enriched.markdown.styles.StyleConfig);\n    public void setAccessibilityLabels(com.swmansion.enriched.markdown.accessibility.AccessibilityLabels);\n    public void setDynamicProps(com.swmansion.enriched.markdown.segments.DynamicBlockProps);\n    public void setOnLatexError(com.swmansion.enriched.markdown.math.LatexErrorReporter);\n    public void applyLatex(java.lang.String);\n}"
+        }
+      }]
+    ]
+  }
+}

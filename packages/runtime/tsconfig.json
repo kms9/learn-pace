@@ -1,0 +1,7 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "noEmit": true
+  },
+  "include": ["src/**/*.ts", "scripts/**/*.ts", "../../scripts/s7-verify/**/*.ts", "../../scripts/s8-quick-check/**/*.ts"]
+}

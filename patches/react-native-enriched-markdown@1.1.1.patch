@@ -1,0 +1,159 @@
+diff --git a/android/src/main/java/com/swmansion/enriched/markdown/EnrichedMarkdown.kt b/android/src/main/java/com/swmansion/enriched/markdown/EnrichedMarkdown.kt
+index b6b38b4cc1a37eacf53f48f940608ed7ead26f93..43b15e259b58c2b43c26803428b288b687ced972 100644
+--- a/android/src/main/java/com/swmansion/enriched/markdown/EnrichedMarkdown.kt
++++ b/android/src/main/java/com/swmansion/enriched/markdown/EnrichedMarkdown.kt
+@@ -1,6 +1,9 @@
+ package com.swmansion.enriched.markdown
+ 
+ import android.content.Context
++import com.facebook.react.bridge.ReactContext
++import com.facebook.react.uimanager.UIManagerHelper
++import com.swmansion.enriched.markdown.events.RenderedSelectionChangeEvent
+ import android.content.res.Configuration
+ import android.os.Build
+ import android.os.Handler
+@@ -343,6 +346,14 @@ class EnrichedMarkdown(
+     }
+   }
+ 
++  internal fun emitRenderedSelectionChange(text: String) {
++    if (id == NO_ID) return
++    val reactContext = context as ReactContext
++    val surfaceId = UIManagerHelper.getSurfaceId(reactContext)
++    val dispatcher = UIManagerHelper.getEventDispatcherForReactTag(reactContext, id)
++    dispatcher?.dispatchEvent(RenderedSelectionChangeEvent(surfaceId, id, text))
++  }
++
+   private fun forwardContextMenuItemPress(
+     itemText: String,
+     selectedText: String,
+diff --git a/android/src/main/java/com/swmansion/enriched/markdown/EnrichedMarkdownInternalText.kt b/android/src/main/java/com/swmansion/enriched/markdown/EnrichedMarkdownInternalText.kt
+index 0c27211fbd6bbfe2196f9b850f294ff0beb8d90d..bd7605321ab7b0ca958740d13177ab2864f651be 100644
+--- a/android/src/main/java/com/swmansion/enriched/markdown/EnrichedMarkdownInternalText.kt
++++ b/android/src/main/java/com/swmansion/enriched/markdown/EnrichedMarkdownInternalText.kt
+@@ -100,6 +100,17 @@ class EnrichedMarkdownInternalText
+       applySelectableState(selectable)
+     }
+ 
++    private var selectionActive = false
++
++    override fun onSelectionChanged(start: Int, end: Int) {
++      super.onSelectionChanged(start, end)
++      val selected = text?.takeIf { start >= 0 && end > start && end <= it.length }
++        ?.substring(start, end).orEmpty()
++      if (selected.isEmpty() && !selectionActive) return
++      selectionActive = selected.isNotEmpty()
++      (parent as? EnrichedMarkdown)?.emitRenderedSelectionChange(selected)
++    }
++
+     fun setContextMenuItems(
+       items: List<String>,
+       onPress: (itemText: String, selectedText: String, selectionStart: Int, selectionEnd: Int) -> Unit,
+diff --git a/android/src/main/java/com/swmansion/enriched/markdown/EnrichedMarkdownManager.kt b/android/src/main/java/com/swmansion/enriched/markdown/EnrichedMarkdownManager.kt
+index 61eed4b3119e1a802b5f99eb36a5ee815b8269b6..c0420d377693e720a4218d7403a31dcf2663fab9 100644
+--- a/android/src/main/java/com/swmansion/enriched/markdown/EnrichedMarkdownManager.kt
++++ b/android/src/main/java/com/swmansion/enriched/markdown/EnrichedMarkdownManager.kt
+@@ -112,7 +112,11 @@ class EnrichedMarkdownManager :
+     MeasurementStore.clearFontScalingSettings(view.id)
+   }
+ 
+-  override fun getExportedCustomDirectEventTypeConstants(): MutableMap<String, Any> = markdownEventTypeConstants()
++  override fun getExportedCustomDirectEventTypeConstants(): MutableMap<String, Any> =
++    markdownEventTypeConstants().apply {
++      val name = com.swmansion.enriched.markdown.events.RenderedSelectionChangeEvent.EVENT_NAME
++      put(name, mapOf("registrationName" to name))
++    }
+ 
+   @ReactProp(name = "markdown")
+   override fun setMarkdown(
+diff --git a/android/src/main/java/com/swmansion/enriched/markdown/events/RenderedSelectionChangeEvent.kt b/android/src/main/java/com/swmansion/enriched/markdown/events/RenderedSelectionChangeEvent.kt
+new file mode 100644
+index 0000000000000000000000000000000000000000..cb680e0471d4dd260b0fdbe99011a32c134a03b8
+--- /dev/null
++++ b/android/src/main/java/com/swmansion/enriched/markdown/events/RenderedSelectionChangeEvent.kt
+@@ -0,0 +1,21 @@
++package com.swmansion.enriched.markdown.events
++
++import com.facebook.react.bridge.Arguments
++import com.facebook.react.bridge.WritableMap
++import com.facebook.react.uimanager.events.Event
++
++internal class RenderedSelectionChangeEvent(
++  surfaceId: Int,
++  viewId: Int,
++  private val text: String,
++) : Event<RenderedSelectionChangeEvent>(surfaceId, viewId) {
++  override fun getEventName(): String = EVENT_NAME
++
++  override fun getEventData(): WritableMap = Arguments.createMap().apply {
++    putString("text", text)
++  }
++
++  companion object {
++    const val EVENT_NAME = "onRenderedSelectionChange"
++  }
++}
+diff --git a/lib/module/EnrichedMarkdownNativeComponent.ts b/lib/module/EnrichedMarkdownNativeComponent.ts
+index b4041e54f47e2fd73a4337f5cea73d3f25665c82..66154fd665d61ce7e48a06703dd35fc63af29c9e 100644
+--- a/lib/module/EnrichedMarkdownNativeComponent.ts
++++ b/lib/module/EnrichedMarkdownNativeComponent.ts
+@@ -588,6 +588,7 @@ export interface NativeProps extends ViewProps {
+    * Receives the item label, the currently selected text, and the selection range.
+    */
+   onContextMenuItemPress?: CodegenTypes.BubblingEventHandler<OnContextMenuItemPressEvent>;
++  onRenderedSelectionChange?: CodegenTypes.DirectEventHandler<Readonly<{ text: string }>>;
+   /**
+    * Sets the text break strategy on Android (API 23+).
+    * @default 'highQuality'
+diff --git a/lib/typescript/src/EnrichedMarkdownNativeComponent.d.ts b/lib/typescript/src/EnrichedMarkdownNativeComponent.d.ts
+index 56e42c8104cec1ee74ba94b9e9dfd2811cf216ff..d2db4795288fee4239413d1fe1a2698d962ce89a 100644
+--- a/lib/typescript/src/EnrichedMarkdownNativeComponent.d.ts
++++ b/lib/typescript/src/EnrichedMarkdownNativeComponent.d.ts
+@@ -532,6 +532,7 @@ export interface NativeProps extends ViewProps {
+      * Receives the item label, the currently selected text, and the selection range.
+      */
+     onContextMenuItemPress?: CodegenTypes.BubblingEventHandler<OnContextMenuItemPressEvent>;
++    onRenderedSelectionChange?: CodegenTypes.DirectEventHandler<Readonly<{ text: string }>>;
+     /**
+      * Sets the text break strategy on Android (API 23+).
+      * @default 'highQuality'
+diff --git a/lib/typescript/src/types/MarkdownTextProps.d.ts b/lib/typescript/src/types/MarkdownTextProps.d.ts
+index 379af3df3b1d0084efc20bef202889feaa7c0902..21d10eac9f5dacc85f6734cbc908408e1d047e32 100644
+--- a/lib/typescript/src/types/MarkdownTextProps.d.ts
++++ b/lib/typescript/src/types/MarkdownTextProps.d.ts
+@@ -340,6 +340,9 @@ export interface EnrichedMarkdownTextProps extends Omit<ViewProps, 'style'> {
+      * @platform ios, android
+      */
+     contextMenuItems?: ContextMenuItem[];
++
++    /** Android GFM text selection, including an empty string when selection ends. */
++    onRenderedSelectionChange?: (event: import("react-native").NativeSyntheticEvent<{ text: string }>) => void;
+     /**
+      * HTTP headers to attach to remote image requests, e.g. a `Referer`
+      * required by CDN hotlink protection or an `Authorization` token.
+diff --git a/src/EnrichedMarkdownNativeComponent.ts b/src/EnrichedMarkdownNativeComponent.ts
+index b4041e54f47e2fd73a4337f5cea73d3f25665c82..66154fd665d61ce7e48a06703dd35fc63af29c9e 100644
+--- a/src/EnrichedMarkdownNativeComponent.ts
++++ b/src/EnrichedMarkdownNativeComponent.ts
+@@ -588,6 +588,7 @@ export interface NativeProps extends ViewProps {
+    * Receives the item label, the currently selected text, and the selection range.
+    */
+   onContextMenuItemPress?: CodegenTypes.BubblingEventHandler<OnContextMenuItemPressEvent>;
++  onRenderedSelectionChange?: CodegenTypes.DirectEventHandler<Readonly<{ text: string }>>;
+   /**
+    * Sets the text break strategy on Android (API 23+).
+    * @default 'highQuality'
+diff --git a/src/types/MarkdownTextProps.ts b/src/types/MarkdownTextProps.ts
+index c088b59d799cc4741f007a97517a1e4cacf95683..4a3d687db3128512229180955dfa038dc449a9fe 100644
+--- a/src/types/MarkdownTextProps.ts
++++ b/src/types/MarkdownTextProps.ts
+@@ -345,6 +345,9 @@ export interface EnrichedMarkdownTextProps extends Omit<ViewProps, 'style'> {
+    * @platform ios, android
+    */
+   contextMenuItems?: ContextMenuItem[];
++
++  /** Android GFM text selection, including an empty string when selection ends. */
++  onRenderedSelectionChange?: (event: import("react-native").NativeSyntheticEvent<{ text: string }>) => void;
+   /**
+    * HTTP headers to attach to remote image requests, e.g. a `Referer`
+    * required by CDN hotlink protection or an `Authorization` token.

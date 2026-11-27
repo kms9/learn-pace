@@ -1,0 +1,24 @@
+diff --git a/dist/auth/context.native.js b/dist/auth/context.native.js
+new file mode 100644
+index 0000000000000000000000000000000000000000..3d33741dbd0c9ccf053dfb7d861b52a89cd38bfc
+--- /dev/null
++++ b/dist/auth/context.native.js
+@@ -0,0 +1,7 @@
++// Native credentials are supplied by the host.
++export function defaultProviderAuthContext() {
++    return {
++        env: async () => undefined,
++        fileExists: async () => false,
++    };
++}
+diff --git a/package.json b/package.json
+index 58cfe4227d649ec8638e3210c6f4d5fa4e39c3a1..5ed61f993b26e412cd7ae991279868b3f1fffa32 100644
+--- a/package.json
++++ b/package.json
+@@ -118,2 +118,5 @@
+-	}
++	},
++	"browser": {
++		"./dist/auth/context.js": "./dist/auth/context.native.js"
++	}
+ }

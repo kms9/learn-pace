@@ -1,0 +1,28 @@
+Learn Pace 第三方来源声明
+
+下列文件改编自 HKUDS/DeepTutor，提交 1284116，许可证 Apache-2.0。
+完整许可证见 upstream/deeptutor/LICENSE。
+
+- packages/domain/src/objective-relations.ts，来源 deeptutor/learning/objective_relations.py
+- packages/domain/src/outline-identity.ts，来源 deeptutor/learning/service.py
+- packages/domain/src/outline-revision.ts，来源 deeptutor/learning/outline_revision.py 与
+  deeptutor/capabilities/mastery/tools.py
+- packages/domain/src/policy.ts 的进度重置规则，来源 deeptutor/learning/service.py
+- packages/domain/src/grading.ts，来源 deeptutor/learning/service.py 与
+  deeptutor/learning/grading.py
+- packages/runtime/src/semantic-assessment.ts，来源 deeptutor/learning/semantic_assessment.py
+- packages/app-host/src/mastery/prompts.ts，来源
+  deeptutor/capabilities/mastery/prompts/zh/mastery_loop.yaml
+  复习模式的会话内总结要求由 Learn Pace 补充。
+- packages/app-host/src/mastery/copy.ts，来源 DeepTutor Web 的 MasteryStudy、mastery-mode 与 next-step-copy
+- scripts/s7-verify/tutor-loop.ts 的验证提示词，来源
+  deeptutor/capabilities/mastery/prompts/zh/mastery_loop.yaml
+
+Learn Pace 经 Cherry Studio Mobile 作者授权，可复用其代码与设计。Android Metro 配置、
+Pi Durable 移动端适配和补丁评估参考 Cherry Studio Mobile 提交 14a0224。
+适配范围见 patches/README.md，上游许可证随 upstream/cherry-studio-mobile 检出。
+
+技能管理参考并改编自同一提交的 src/backend/services/skill/{skillPackage,
+skillArchive,skillSources,skillCompatibility}.ts、src/backend/utils/zipReader.ts、
+src/shared/utils/sha256.ts 与 src/backend/ai/agent/tools/skill/skillTools.ts。
+上游许可证为 AGPL-3.0，见 upstream/cherry-studio-mobile/LICENSE。

@@ -10,7 +10,7 @@
 
 | 领域 | 逻辑表/实体 | 关键字段或关系 |
 | --- | --- | --- |
-| 学习者与配置 | learner_profiles、curriculum_profiles、settings | learner_id、scope、偏好/来源、场景标签；场景不等同能力 |
+| 学习者与配置 | learner_profiles、settings | learner_id、scope、偏好/来源；每条路径的学习档案（背景、目标程度、时间、先探查或先讲解）由导师维护 |
 | 模型 | providers、models | provider_id、base_url、model_id、capabilities、credential_ref |
 | 会话 | sessions、messages、message_parts、session_threads | session_id、type、path_id(可空)、mode、parent_message_id、source_message_id、选文 |
 | Agent 执行 | turns、turn_submissions、tool_calls、turn_events | turn_id、submission_id、seq、status、request_digest、error、receipt |
@@ -24,4 +24,4 @@
 
 
 ## 数据关系约束
-Session 与 LearningPath 生命周期独立，单个路径允许多个会话。稳定 Objective ID 不随排序改变；题目版本与原答、评估依据、评分器/策略版本绑定。学习者自报与系统评估分开；作废证据保留审计。详见 LF02 与复评第4节。
+Session 与 LearningPath 生命周期独立，单个路径允许多个会话；会话模式（outline / study / review）可在会话中切换。小老师侧聊是带父会话与锚点消息的独立会话。稳定 Objective ID 不随排序改变，大纲修订按名称与类型保持 ID；大纲预览记录基线版本并在过期后失效。题目版本与原答、评估依据、评分器/策略版本绑定。学习者自报掌握（`learner_mastery_overrides`）与系统评估分开记录，不产生测评证据；作废证据保留审计。P0 不使用 `curriculum_profiles`（2026-11-25 移除学习场景）。详见 [LF02](04-lf02-mastery-flow.md)。

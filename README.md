@@ -32,7 +32,7 @@ Learn Pace 的目标是在移动设备上独立运行 **Agent 调度与学习业
 
 **验收方向**：无需独立业务服务器，客户端可直接使用外部模型 API 完成连续多轮会话、授权工具调用、保存与恢复；工具失败或取消时保留准确的会话状态。
 
-**上游入口**：[Chat capability](https://github.com/HKUDS/DeepTutor/blob/main/deeptutor/agents/chat/capability.py) · [Agentic chat pipeline](https://github.com/HKUDS/DeepTutor/blob/main/deeptutor/agents/chat/agentic_pipeline.py) · [核心模块声明](https://github.com/HKUDS/DeepTutor/blob/main/deeptutor/modules/manifests/core.json)。
+**上游入口**：[Chat capability](https://github.com/HKUDS/DeepTutor/blob/1284116f92368480aef3a47f91b8df9e9b105062/deeptutor/agents/chat/capability.py) · [Agentic chat pipeline](https://github.com/HKUDS/DeepTutor/blob/1284116f92368480aef3a47f91b8df9e9b105062/deeptutor/agents/chat/agentic_pipeline.py) · [核心模块声明](https://github.com/HKUDS/DeepTutor/blob/1284116f92368480aef3a47f91b8df9e9b105062/deeptutor/modules/manifests/core.json)。
 
 ### LF02 · Mastery Path 掌握学习
 
@@ -48,9 +48,9 @@ Learn Pace 的目标是在移动设备上独立运行 **Agent 调度与学习业
 
 **验收方向**：客户端能够独立保存并恢复学习路径、学习证据与复习任务；使用外部模型提供讲解与定性判断，但掌握度更新、进阶决策和数据一致性仍由本地学习业务规则管理。
 
-**上游入口**：[Mastery Path capability](https://github.com/HKUDS/DeepTutor/blob/main/deeptutor/capabilities/mastery/capability.py) · [学习模型与阶段](https://github.com/HKUDS/DeepTutor/blob/main/deeptutor/learning/models.py) · [路径/掌握决策](https://github.com/HKUDS/DeepTutor/blob/main/deeptutor/learning/policy.py) · [掌握度计算](https://github.com/HKUDS/DeepTutor/blob/main/deeptutor/learning/mastery.py) · [复习调度](https://github.com/HKUDS/DeepTutor/blob/main/deeptutor/learning/scheduler.py)。
+**上游入口**：[Mastery Path capability](https://github.com/HKUDS/DeepTutor/blob/1284116f92368480aef3a47f91b8df9e9b105062/deeptutor/capabilities/mastery/capability.py) · [学习模型与阶段](https://github.com/HKUDS/DeepTutor/blob/1284116f92368480aef3a47f91b8df9e9b105062/deeptutor/learning/models.py) · [路径/掌握决策](https://github.com/HKUDS/DeepTutor/blob/1284116f92368480aef3a47f91b8df9e9b105062/deeptutor/learning/policy.py) · [掌握度计算](https://github.com/HKUDS/DeepTutor/blob/1284116f92368480aef3a47f91b8df9e9b105062/deeptutor/learning/mastery.py) · [复习调度](https://github.com/HKUDS/DeepTutor/blob/1284116f92368480aef3a47f91b8df9e9b105062/deeptutor/learning/scheduler.py)。
 
-## 架构方向（待技术验证）
+## 架构方向与当前技术决策
 
 ```text
 Mobile UI
@@ -58,12 +58,12 @@ Mobile UI
    └── Local Application / Agent Host
          ├── LF01 Chat / Concept Tutoring
          ├── LF02 Mastery Path / Learning Domain
-         ├── Agent Runtime + Authorized Tools
+         ├── Agent Runtime (Pi Durable) + Authorized Tools
          ├── Local SQLite / Files
-         └── Model Provider Adapter ───► 外部模型 API（云端或局域网）
+         └── Model Provider Adapter ───► 外部模型 API（首期 DeepSeek Flash）
 ```
 
-候选技术：**React Native / Expo + TypeScript + SQLite**；Agent Runtime 对比 **Pi Durable** 与 DeepTutor 已有的实验性 TypeScript Chat Engine。DeepTutor Lite 提供基于 Pi Agent Core / Pi AI 的独立 TypeScript CLI 实现，可用于研究通用 Agent Loop、模型接入、Tool 注册、Skills / Prompts 装配及会话恢复的替代方案；其 Node.js 运行时与 Ink TUI 不直接适用于移动端。此处是技术评估方向，**尚未确定实现，也尚未完成可运行客户端**。
+已确认技术方向：**React Native / Expo + TypeScript + SQLite**；Agent Runtime 主选最新版 **Pi Durable**（`@earendil-works/pi-durable`），参考并直接复用已获作者明确授权的 Cherry Studio Mobile 移动端适配代码与设计。首期模型仅需确保 **DeepSeek Flash** 接入；开发推进上采用“主流程先行、事务控制后置”策略——先跑通 LF01/LF02 主流程，再统一补齐事务控制、CAS、幂等与恢复加固。当前**尚未完成可运行客户端**，即将进入 M1 真机验证。
 
 ## 上游项目与参考关系
 
@@ -74,9 +74,9 @@ Mobile UI
 | Cherry Studio Mobile | [CherryHQ/cherry-studio-app](https://github.com/CherryHQ/cherry-studio-app) | React Native / Expo、移动端进程内 Pi Agent Runtime、SQLite、原生工具 |
 | Cherry Studio Desktop | [CherryHQ/cherry-studio](https://github.com/CherryHQ/cherry-studio) | 跨平台架构与桌面端实现参考 |
 
-本仓库是**独立项目**，不是上述仓库的 Fork。DeepTutor、DeepTutor Lite 与 Cherry Studio Mobile 作为 **Git Submodule** 固定到指定上游提交，仅供源码对照和后续迁移研究；Cherry Studio Desktop 保留链接参考。后续实际复用代码时，仍需遵循相应许可证与归属要求。
+本仓库是**独立开源项目**，不是上述仓库的 Fork。DeepTutor、DeepTutor Lite 与 Cherry Studio Mobile 作为 **Git Submodule** 固定到指定上游提交（DeepTutor `1284116`、DeepTutor Lite `5082b93`、Cherry Studio Mobile `14a0224`），Cherry Studio Desktop 保留链接参考。Learn Pace 已与 Cherry Studio App 作者沟通获得明确授权，可直接复用和参考 Cherry Studio Mobile 中可用的代码与设计；复用各上游内容时保留相应的许可证与归属声明。
 
-DeepTutor Lite 仅作为轻量化提取参考，不是 Learn Pace 的运行时依赖，也不作为学习业务的权威基线：LF01 可参考其 [Harness](https://github.com/leonyvon/deeptutor-lite/blob/main/src/agent/harness.ts)、[Skills / Prompts](https://github.com/leonyvon/deeptutor-lite/blob/main/src/agent/resources.ts) 与交互式提问/恢复机制；LF02 可参考其 [Mastery Tools](https://github.com/leonyvon/deeptutor-lite/blob/main/src/tools/mastery.ts) 的封装方式，但学习证据、掌握门槛、状态推进及复习规则仍以官方 DeepTutor 的 Learning Domain 和测试为业务基线。移动端运行时与原生适配继续以 Cherry Studio Mobile 为工程参考。
+DeepTutor Lite 仅作为轻量化提取参考，不是 Learn Pace 的运行时依赖，也不作为学习业务的权威基线：LF01 可参考其 [Harness](https://github.com/leonyvon/deeptutor-lite/blob/5082b93f9317b8ec8264f3261b86af2b8b280683/src/agent/harness.ts)、[Skills / Prompts](https://github.com/leonyvon/deeptutor-lite/blob/5082b93f9317b8ec8264f3261b86af2b8b280683/src/agent/resources.ts) 与交互式提问/恢复机制；LF02 可参考其 [Mastery Tools](https://github.com/leonyvon/deeptutor-lite/blob/5082b93f9317b8ec8264f3261b86af2b8b280683/src/tools/mastery.ts) 的封装方式，但学习证据、掌握门槛、状态推进及复习规则仍以官方 DeepTutor 的 Learning Domain 和测试为业务基线。移动端运行时与原生适配以 Cherry Studio Mobile 为直接复用与工程参考基础，并升级适配至 Pi 最新版本。
 
 ### 上游源码 Submodule
 
@@ -114,8 +114,9 @@ git status
 - [原型设计](docs/design/README.md)：V0.1 原型校验、V0.2 12 组 / 41 状态的自包含 HTML。
 - [学习闭环复评](docs/evaluation/learning-loop-review-v0.2.md)：主路径已具备设计覆盖；异常交互及真实工程验证仍待完成。
 - [实施路线与 Gate](docs/roadmap.md)。
+- [可行性评估与实施方案](docs/evaluation/feasibility-and-plan-v0.2.md)：上游许可证/Runtime 核对、风险与 M0–M3 实施计划。
 
-当前基线为拟议设计 V0.2，尚待产品评审冻结；原始 PNG 待补传，不视为已同步。三个上游源码引用保持不变。
+当前基线为设计 V0.2（核心工程决策已确认，详见[可行性评估与实施方案](docs/evaluation/feasibility-and-plan-v0.2.md)）；全部 65 张原始 PNG（V0.1 12 张，V0.2 12 张组图及 41 张状态图）均已同步并通过 [assets.sha256](docs/design/assets.sha256)（66 项）校验。三个上游源码子模块引用保持不变。
 
 ## 当前阶段与下一步
 

@@ -1,0 +1,159 @@
+import { ModelSettingsError, RestoreGateError } from "@learn-pace/app-host";
+import { deepSeekOfficialDefaults } from "@learn-pace/runtime";
+import { useRouter } from "expo-router";
+import { useEffect, useRef, useState } from "react";
+import { Keyboard, StyleSheet, Text, TextInput } from "react-native";
+import { importUsbConfiguration } from "../../src/configuration";
+import { BackupCard } from "../../src/components/BackupCard";
+import { ReviewReminderCard } from "../../src/components/ReviewReminderCard";
+import { Action, Card, Page, styles } from "../../src/components/Shell";
+import { useApp } from "../../src/context/AppContext";
+import { colors, spacing } from "../../src/theme";
+
+type Feedback = { message: string; failed?: boolean };
+
+export default function Settings() {
+  const { service, snapshot, reload, devClock } = useApp();
+  const router = useRouter();
+  const saved = snapshot.model.settings;
+  const [baseUrl, setBaseUrl] = useState(saved?.baseUrl ?? deepSeekOfficialDefaults.baseUrl);
+  const [model, setModel] = useState(saved?.model ?? deepSeekOfficialDefaults.model);
+  const [apiKey, setApiKey] = useState("");
+  const [code, setCode] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [feedback, setFeedback] = useState<Feedback>();
+  const [clockDays, setClockDays] = useState(() => String(devClock?.days ?? 0));
+  const running = useRef(false);
+
+  useEffect(() => {
+    setBaseUrl(saved?.baseUrl ?? deepSeekOfficialDefaults.baseUrl);
+    setModel(saved?.model ?? deepSeekOfficialDefaults.model);
+  }, [saved?.baseUrl, saved?.model]);
+
+  async function perform(action: () => Promise<Feedback>) {
+    if (running.current) return;
+    running.current = true;
+    setBusy(true);
+    setFeedback(undefined);
+    try {
+      setFeedback(await action());
+    } catch (error) {
+      setFeedback({
+        message: error instanceof ModelSettingsError || error instanceof RestoreGateError ? error.message : "操作失败，请检查配置后重试。",
+        failed: true,
+      });
+    } finally {
+      setBusy(false);
+      running.current = false;
+    }
+  }
+
+  async function save(source: "manual" | "usb"): Promise<Feedback> {
+    if (source === "usb") {
+      await service.saveImportedModelSettings(await importUsbConfiguration(code));
+      setCode("");
+    } else {
+      await service.saveModelSettings({ baseUrl, model, apiKey });
+    }
+    setApiKey("");
+    await reload();
+    return { message: "模型配置已保存" };
+  }
+
+  return (
+    <Page title="我的" keyboard>
+      <Card title="DeepSeek Flash">
+        <Text style={styles.body}>{snapshot.model.configured ? "已配置" : "尚未配置"}</Text>
+        <Text style={styles.body}>网关地址</Text>
+        <TextInput
+          accessibilityLabel="网关地址"
+          style={form.input}
+          value={baseUrl}
+          onChangeText={setBaseUrl}
+          placeholder={deepSeekOfficialDefaults.baseUrl}
+          autoCapitalize="none"
+          autoCorrect={false}
+          editable={!busy}
+          keyboardType="url"
+        />
+        <Text style={styles.body}>模型 ID</Text>
+        <TextInput
+          accessibilityLabel="模型 ID"
+          style={form.input}
+          value={model}
+          onChangeText={setModel}
+          autoCapitalize="none"
+          autoCorrect={false}
+          editable={!busy}
+        />
+        {(baseUrl !== deepSeekOfficialDefaults.baseUrl || model !== deepSeekOfficialDefaults.model) &&
+          <Action label="使用 DeepSeek 官方配置" secondary disabled={busy} onPress={() => {
+            setBaseUrl(deepSeekOfficialDefaults.baseUrl);
+            setModel(deepSeekOfficialDefaults.model);
+            setApiKey("");
+            setFeedback(undefined);
+          }} />}
+        <Text style={styles.body}>API Key</Text>
+        <TextInput
+          accessibilityLabel="API Key"
+          style={form.input}
+          value={apiKey}
+          onChangeText={setApiKey}
+          placeholder={snapshot.model.configured ? "同源更新可留空" : "输入 API Key"}
+          secureTextEntry
+          autoCapitalize="none"
+          autoCorrect={false}
+          editable={!busy}
+        />
+        <Action label="保存模型配置" disabled={busy || !baseUrl.trim()} onPress={() => void perform(() => save("manual"))} />
+        <Action label="测试连通性" disabled={busy || !snapshot.model.configured} onPress={() => void perform(async () => {
+          const result = await service.testModelConnection();
+          return result.ok ? { message: `连接成功 · ${result.elapsedMs} ms` } : { message: result.message, failed: true };
+        })} secondary />
+        {busy && <Text accessibilityLiveRegion="polite" style={styles.body}>正在处理</Text>}
+        {feedback && <Text accessibilityLiveRegion="polite" style={feedback.failed ? form.failure : form.success}>{feedback.message}</Text>}
+      </Card>
+      <Card title="技能">
+        <Action label="技能管理" onPress={() => router.push("/settings/skills")} secondary />
+      </Card>
+      <Card title="知识库">
+        <Action label="管理知识库" onPress={() => router.push("/settings/knowledge")} secondary />
+      </Card>
+      <BackupCard />
+      <ReviewReminderCard />
+      {__DEV__ && (
+        <Card title="开发工具">
+          <TextInput
+            accessibilityLabel="USB 配对码"
+            style={form.input}
+            value={code}
+            onChangeText={setCode}
+            placeholder="USB 配对码"
+            maxLength={6}
+            keyboardType="number-pad"
+            editable={!busy}
+          />
+          <Action label="通过 USB 导入" disabled={busy || !/^\d{6}$/.test(code)} onPress={() => void perform(() => save("usb"))} secondary />
+          <Action label="打开 M1 验证工作台" onPress={() => router.push("/dev/m1-workbench")} secondary />
+          <Action label="S7 导师循环验证" onPress={() => router.push("/dev/s7-tutor-loop")} secondary />
+          {devClock && <>
+            <Text style={styles.body}>时钟偏移（天）</Text>
+            <TextInput accessibilityLabel="时钟偏移（天）" style={form.input} value={clockDays} onChangeText={setClockDays}
+              keyboardType="numbers-and-punctuation" maxLength={7} selectTextOnFocus />
+            <Action label="应用时钟偏移" disabled={!/^-?\d+$/.test(clockDays)} onPress={() => {
+              Keyboard.dismiss();
+              devClock.setDays(Number(clockDays));
+            }} secondary />
+            <Text accessibilityLiveRegion="polite" style={styles.body}>{`当前偏移 ${devClock.days} 天，重启后归零`}</Text>
+          </>}
+        </Card>
+      )}
+    </Page>
+  );
+}
+
+const form = StyleSheet.create({
+  input: { minHeight: 46, borderWidth: 1, borderColor: colors.border, borderRadius: 8, paddingHorizontal: spacing.sm, color: colors.text, fontSize: 15 },
+  failure: { color: colors.danger, fontSize: 15 },
+  success: { color: colors.success, fontSize: 15 },
+});
