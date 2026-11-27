@@ -68,10 +68,15 @@ it("keeps the SQL version column synchronized with the stored progress JSON", as
     .toEqual({ version: 7, json_version: 7 });
 });
 
-it("opens a new WAL database and round-trips the v6 repositories", async () => {
+it("opens a new WAL database and round-trips the v9 repositories", async () => {
   const store = await ExpoLearningStore.open();
-  expect(db.prepare("PRAGMA user_version").get()).toMatchObject({ user_version: 6 });
+  expect(db.prepare("PRAGMA user_version").get()).toMatchObject({ user_version: 9 });
   expect(await store.inspect()).toMatchObject({ journalMode: "wal", paths: 0 });
+  expect(db.prepare("SELECT name FROM sqlite_schema WHERE type = 'table' ORDER BY name").all()
+    .map((row) => row.name)).toEqual([
+    "domain_events", "interactions", "knowledge_cards", "learning_progress", "messages", "provider_connections",
+    "session_threads", "sessions", "settings", "skill_bindings", "skill_revisions", "skills", "source_bindings",
+  ]);
   const session = {
     session_id: "s", kind: "chat", path_id: null, mode: null, title: "Ratios",
     model_id: null, created_at: 1, updated_at: 1,
@@ -144,10 +149,10 @@ it.each([0, 1])("migrates populated v%s data and resumes a partial migration", a
   expect(await reopened.listPathSummaries()).toEqual([
     { path_id: "old", name: "Renamed", status: "draft", updated_at: 200 },
   ]);
-  expect(db.prepare("PRAGMA user_version").get()).toMatchObject({ user_version: 6 });
+  expect(db.prepare("PRAGMA user_version").get()).toMatchObject({ user_version: 9 });
 });
 
-it.each([false, true])("preserves v2 threads during upgrade to v6 (partial=%s)", async (partial) => {
+it.each([false, true])("preserves v2 threads during upgrade to v9 (partial=%s)", async (partial) => {
   db.exec(`
     PRAGMA user_version = 2;
     CREATE TABLE learning_progress (path_id TEXT PRIMARY KEY NOT NULL, progress TEXT NOT NULL);
@@ -168,10 +173,10 @@ it.each([false, true])("preserves v2 threads during upgrade to v6 (partial=%s)",
     selection_start: partial ? 3 : null, selection_end: null, detached_at: null,
   });
   expect(await (await ExpoLearningStore.open()).getThread("child")).toEqual(await store.getThread("child"));
-  expect(db.prepare("PRAGMA user_version").get()).toMatchObject({ user_version: 6 });
+  expect(db.prepare("PRAGMA user_version").get()).toMatchObject({ user_version: 9 });
 });
 
-it("migrates a populated v3 interaction table to v6", async () => {
+it("migrates a populated v3 interaction table to v9", async () => {
   db.exec(`
     PRAGMA user_version = 3;
     CREATE TABLE learning_progress (path_id TEXT PRIMARY KEY NOT NULL, progress TEXT NOT NULL);
@@ -187,7 +192,7 @@ it("migrates a populated v3 interaction table to v6", async () => {
       .run(status, status, JSON.stringify(question), `sub-${status}`);
   }
   const store = await ExpoLearningStore.open();
-  expect(db.prepare("PRAGMA user_version").get()).toMatchObject({ user_version: 6 });
+  expect(db.prepare("PRAGMA user_version").get()).toMatchObject({ user_version: 9 });
   for (const status of ["awaiting_input", "answered", "graded"]) {
     expect(await (await ExpoLearningStore.open()).getInteraction(status)).toMatchObject({
       status, question, raw_answer: "raw", submission_id: `sub-${status}`,
@@ -232,7 +237,7 @@ it("upgrades v4 in place, preserves old messages and keeps the latest duplicate 
   db.exec("DROP TRIGGER fail_dedup");
   await ExpoLearningStore.open();
   const reopened = await ExpoLearningStore.open();
-  expect(db.prepare("PRAGMA user_version").get()).toMatchObject({ user_version: 6 });
+  expect(db.prepare("PRAGMA user_version").get()).toMatchObject({ user_version: 9 });
   expect(await reopened.get("p")).toEqual(progress);
   expect(db.prepare("SELECT path_id, version FROM learning_progress ORDER BY path_id").all()).toEqual([
     { path_id: "legacy", version: 0 }, { path_id: "p", version: 7 },
@@ -276,7 +281,8 @@ it.each(["expo", "memory"])("round-trips staged group answers and grades with %s
 it("atomically upgrades v5 to v6 and rolls back table, index and version on failure", async () => {
   const preexisting = await ExpoLearningStore.open();
   await preexisting.writeSetting("v5", "旧数据");
-  db.exec("DROP TABLE knowledge_cards; PRAGMA user_version = 5;");
+  db.exec(`DROP TABLE skill_bindings; DROP TABLE skill_revisions; DROP TABLE skills;
+    DROP TABLE knowledge_cards; PRAGMA user_version = 5;`);
   const connection = sqliteConnection(db);
   await expect(migrateLearningDatabase({ ...connection, execAsync: async (sql) => {
     await connection.execAsync(sql);
@@ -286,7 +292,86 @@ it("atomically upgrades v5 to v6 and rolls back table, index and version on fail
   expect(db.prepare("SELECT name FROM sqlite_schema WHERE name LIKE 'knowledge_cards%'").all()).toEqual([]);
   expect(await preexisting.readSetting("v5")).toBe("旧数据");
   const migrated = await ExpoLearningStore.open();
-  expect(db.prepare("PRAGMA user_version").get()).toMatchObject({ user_version: 6 });
+  expect(db.prepare("PRAGMA user_version").get()).toMatchObject({ user_version: 9 });
   expect(await migrated.listKnowledgeCards()).toEqual([]);
   expect(await migrated.readSetting("v5")).toBe("旧数据");
+});
+
+it("atomically upgrades v6 to v7 and preserves existing data after a partial migration failure", async () => {
+  await ExpoLearningStore.open();
+  db.exec(`DROP TABLE skill_bindings; DROP TABLE skill_revisions; DROP TABLE skills;
+    INSERT INTO knowledge_cards (card_id, source_kind, title, content, created_at, updated_at)
+      VALUES ('card', 'chat', '比例', '旧资料', 1, 1);
+    PRAGMA user_version = 6;`);
+  const connection = sqliteConnection(db);
+  await expect(migrateLearningDatabase({ ...connection, execAsync: async (sql) => {
+    if (!sql.includes("CREATE TABLE IF NOT EXISTS skill_revisions")) return connection.execAsync(sql);
+    await connection.execAsync(sql.slice(0, sql.indexOf("CREATE TABLE IF NOT EXISTS skill_revisions")));
+    throw new Error("injected v7 migration failure");
+  } })).rejects.toThrow("injected v7 migration failure");
+
+  expect(db.prepare("PRAGMA user_version").get()).toMatchObject({ user_version: 6 });
+  expect(db.prepare("SELECT name FROM sqlite_schema WHERE name LIKE 'skill%'").all()).toEqual([]);
+  expect(db.prepare("SELECT content FROM knowledge_cards WHERE card_id = 'card'").get())
+    .toMatchObject({ content: "旧资料" });
+
+  const store = await ExpoLearningStore.open();
+  expect(db.prepare("PRAGMA user_version").get()).toMatchObject({ user_version: 9 });
+  expect(db.prepare("SELECT name FROM sqlite_schema WHERE type = 'index' AND name LIKE 'skill%' ORDER BY name").all())
+    .toEqual([{ name: "skill_bindings_by_scope" }, { name: "skill_revisions_by_skill" }, { name: "skills_origin_unique" }]);
+  expect(await store.listKnowledgeCards()).toMatchObject([{ card_id: "card", content: "旧资料" }]);
+});
+
+it("rolls back v8 DDL and preserves v7 data after an interrupted upgrade", async () => {
+  const old = await ExpoLearningStore.open();
+  await old.writeSetting("v7", "旧数据");
+  db.exec("DROP TABLE source_bindings; DROP TABLE provider_connections; PRAGMA user_version = 7;");
+  const connection = sqliteConnection(db);
+  await expect(migrateLearningDatabase({ ...connection, execAsync: async (sql) => {
+    const secondTable = sql.indexOf("CREATE TABLE IF NOT EXISTS source_bindings");
+    if (secondTable < 0) return connection.execAsync(sql);
+    await connection.execAsync(sql.slice(0, secondTable));
+    throw new Error("injected v8 migration failure");
+  } })).rejects.toThrow("injected v8 migration failure");
+  expect(db.prepare("PRAGMA user_version").get()).toMatchObject({ user_version: 7 });
+  expect(db.prepare("SELECT name FROM sqlite_schema WHERE name = 'provider_connections'").get()).toBeUndefined();
+  const restored = await ExpoLearningStore.open();
+  expect(db.prepare("PRAGMA user_version").get()).toMatchObject({ user_version: 9 });
+  expect(await restored.readSetting("v7")).toBe("旧数据");
+  expect(await restored.listProviderConnections()).toEqual([]);
+  expect(await restored.listSourceBindings()).toEqual([]);
+});
+
+it("upgrades a v8 skills table atomically and retains its existing sources, revisions and bindings", async () => {
+  const old = await ExpoLearningStore.open();
+  const layout = db.prepare("SELECT sql FROM sqlite_schema WHERE name = 'skills'").get()!.sql as string;
+  db.exec(`
+    DROP TABLE skills;
+    ${layout.replace(", 'registry'", "")};
+    CREATE UNIQUE INDEX skills_origin_unique ON skills (origin_kind, origin_locator);
+    PRAGMA user_version = 8;
+  `);
+  const skill = { skill_id: "old", name: "old", description: "Legacy package", origin_kind: "local_file" as const,
+    origin_locator: "local:old", source_url: null, pinned_ref: null, active_revision: "revision", enabled: 1 as const,
+    user_invocable: 1 as const, disable_model_invocation: 0 as const, compatibility_json: "{}", metadata_json: "{}",
+    created_at: 1, updated_at: 1 };
+  await old.saveSkill(skill);
+  await old.saveSkillRevision({ skill_id: "old", revision: "revision", manifest_json: "[]", files_json_base64: "{}",
+    raw_bytes: 2, instructions_chars: 0, created_at: 1 });
+  await old.saveSkillBinding({ skill_id: "old", scope: "lf01", enabled: 1, updated_at: 1 });
+  const before = await old.exportSnapshot();
+
+  const connection = sqliteConnection(db);
+  await expect(migrateLearningDatabase({ ...connection, execAsync: async (sql) => {
+    await connection.execAsync(sql);
+    if (sql.includes("ALTER TABLE skills_v9")) throw new Error("injected v9 migration failure");
+  } })).rejects.toThrow("injected v9 migration failure");
+  expect(db.prepare("PRAGMA user_version").get()).toMatchObject({ user_version: 8 });
+  expect(await old.exportSnapshot()).toEqual(before);
+
+  const store = await ExpoLearningStore.open();
+  expect(await store.exportSnapshot()).toEqual(before);
+  await store.saveSkill({ ...skill, skill_id: "market", name: "market", origin_kind: "registry",
+    origin_locator: "eduhub:teacher/market", source_url: "https://eduhub.deeptutor.info/skills/market", pinned_ref: "1.0.0" });
+  expect(await store.getSkill("market")).toMatchObject({ origin_kind: "registry", pinned_ref: "1.0.0" });
 });

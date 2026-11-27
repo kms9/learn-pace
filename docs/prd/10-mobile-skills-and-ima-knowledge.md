@@ -1,12 +1,11 @@
 # 10 · 移动端 Skill 管理与 ima 知识库扩展 PRD
 
-> 版本：V0.4 / M2-C 产品需求提案（待评审）  
+> 版本：V0.5 / M2-D 产品需求（由 V0.4 提案基线对齐至 `64d3034`）  
 > 日期：2026-11-26  
-> 基线：docs/feasibility-plan @ fa06efe8488cf8cc53cb1ae9d18765bbbff59b61  
-> 范围：P1 可选增强；Change 10 → 11 → 12；Android ARM64 优先  
+> 范围为 P1 可选增强，M2-D 只读知识库相关切片为 Change 13 → 14a → 15。原提案的「切片 10/11/12」对应这三项，M2-C Change 10–12 已用于提醒、问答自测、错题与知识卡。Android ARM64 优先。
 > 本文描述产品行为、业务规则与验收，不代表已实现或已通过测试。
 
-**文档关系**：本文是 M2-C 的产品需求入口；[V0.4 技术方案](../evaluation/mobile-skill-ima-extension-plan-v0.4.md)负责架构、接口、源码迁移与预算设计；[OpenSpec 路线](../../openspec/ROADMAP.md)负责竖切顺序及实施 Gate；[Change 10](../../openspec/changes/m2c-mobile-skill-management/proposal.md)负责当前详细实施规格。P0 产品、评分、事务、恢复等既有规则继续以 [PRD 00–09](README.md) 与已归档 OpenSpec 为准。本 PRD 不回改归档历史；Change 11/12 在前一项验收归档后再生成详细 specs/tasks。
+本文定义移动端 Skill 与 ima 知识库的产品需求。技术方案记录架构、接口与预算，OpenSpec 路线记录竖切和验收门禁。Change 13 和只读知识库问答 Change 14a 的实施规格均已归档。Change 15 待立项，Change 14b 的受控上传需先补充产品需求和验收编号。P0 产品、评分、事务、恢复与 V0.4 既有规则继续以 PRD 00–09 与已归档 OpenSpec 为准。[技术方案](../evaluation/mobile-skill-ima-extension-plan-v0.4.md) · [OpenSpec 路线](../../openspec/ROADMAP.md) · [Change 13](../../openspec/changes/archive/2026-11-26-m2d-mobile-skill-management/proposal.md) · [Change 14a](../../openspec/changes/archive/2026-11-26-m2d-ima-knowledge-lf01/proposal.md) · [PRD 00–09](README.md)
 
 ## 1. 背景、问题与产品目标
 
@@ -334,9 +333,9 @@ Change 11 实际通过后，将相同 Skill/KnowledgeProvider 能力扩展到现
 
 | 需求族 | 主要实施归属 | 文档来源 |
 |---|---|---|
-| SKM / SKR | Change 10：mobile-skill-management、skill-turn-runtime；app-host、infra、runtime、mobile | V0.4 §2–5、§10.1–3；当前 [OpenSpec](../../openspec/changes/m2c-mobile-skill-management/proposal.md) |
-| KB / IMA / QA | Change 11：通用 KnowledgeProvider 与 ima LF01；新 specs 待 Change 10 归档 | V0.4 §5–6、§10.4 |
-| MP | Change 12：知识库与精通之路；新 specs 待 Change 11 归档 | V0.4 §7 |
+| SKM / SKR | Change 13（`m2d-mobile-skill-management`）：mobile-skill-management、skill-turn-runtime、local-storage、local-backup-restore、lf01-chat；app-host、infra、runtime、mobile | V0.4 §2–5、§10.1–3；当前 [OpenSpec](../../openspec/changes/archive/2026-11-26-m2d-mobile-skill-management/proposal.md) |
+| KB / IMA / QA | Change 14a（`m2d-ima-knowledge-lf01`），只读 `KnowledgeProvider`、ima 原文读取与 LF01／小老师带引用问答 | [OpenSpec 归档提案](../../openspec/changes/archive/2026-11-26-m2d-ima-knowledge-lf01/proposal.md)，V0.4 §5–6、§10.4 |
+| MP | Change 15（`m2d-knowledge-mastery`），知识库与精通之路，待立项 | V0.4 §7 |
 | EXT-NFR / AC-M2C | 各切片的安全、备份、恢复、真机 Gate；Change 10 包含 local-backup-restore delta | V0.4 §8–10；PRD 08/09 |
 
 待评审/验证，不预先宣称已通过：SQLite 包与下载预算的真机适用性、自动发现模型轮次与 token、官方 ima Skill 脚本/API 最新契约及真实账号权限/额度、媒体格式解析覆盖、同轮单库或多库 UI 策略（建议首期单库）、来源快照/备份容量、具体性能 SLO、复用文件的许可证归属。现有 M2-C 范围建议（手工导入、只读、无市场/脚本、先 LF01 再 LF02）未被技术方案单方面冻结；本次形成需求提案供产品评审，后续按 Gate 调整并同步需求 ID。未修改历史评审决议。

@@ -173,9 +173,9 @@ it("saves the first chunk, throttles later checkpoints, and commits the full fin
   await configure();
   const { session_id } = await chat.createSession();
   const writes = vi.spyOn(store, "saveMessage");
-  await chat.send(session_id, "question", [], ({ content }) => {
+  await chat.send(session_id, "question", [], { onMessage: ({ content }) => {
     if (content === "abc") advance();
-  });
+  } });
   expect(writes.mock.calls.map(([message]) => [message.role, message.status, message.content])).toEqual([
     ["user", "committed", "question"], ["assistant", "generating", ""], ["assistant", "generating", "a"],
     ["assistant", "generating", "abcd"], ["assistant", "committed", "abcd"],
@@ -189,9 +189,9 @@ it("stops a streamed reply and prevents overlapping turns in the same session", 
   fetch.mockImplementationOnce(stream);
   await configure();
   const { session_id } = await chat.createSession();
-  const sending = chat.send(session_id, "question", [], (message) => {
+  const sending = chat.send(session_id, "question", [], { onMessage: (message) => {
     if (message.role === "assistant" && message.content) chat.stop(session_id);
-  });
+  } });
   await expect(chat.send(session_id, "another question")).rejects.toThrow("正在处理");
   const interrupted = await sending;
   expect(aborted).toHaveBeenCalledOnce();
@@ -324,4 +324,45 @@ it("reopens a side chat, detaches its anchor and deletes only its own records", 
   expect(await reopened.listThreads(session_id)).toMatchObject([{ thread_id: second.thread_id }]);
   expect(await store.listMessages(thread.thread_id)).toEqual([]);
   expect(await reopened.readConversation(session_id)).toMatchObject({ messages: [] });
+});
+
+it("keeps checkpointed skill receipts when an empty answer fails", async () => {
+  const skillId = "checkpoint-coach";
+  const source = "---\nname: checkpoint-coach\ndescription: Fraction tutoring\n---\nOnly use the example.";
+  const { host, chat, store, configure, fetch } = harness(
+    completion([toolCall("list_skill_files", { skillId })], "tool_calls"),
+    completion([text(" ")]),
+  );
+  await configure();
+  const service = host.createSkillService();
+  const preview = await service.previewLocal(new TextEncoder().encode(source), "local_file");
+  await service.confirm(preview);
+  await service.setEnabled(skillId, true);
+  await service.setScope(skillId, "lf01", true);
+  const saved = vi.spyOn(store, "saveMessage");
+  const result = await chat.sendNew("查看材料", [], { skillId });
+  expect(fetch).toHaveBeenCalledTimes(2);
+  expect(result).toMatchObject({ status: "failed", metadata: { skill_receipts: [
+    { skillId, revision: preview.revision, status: "explicit_loaded" },
+    { skillId, revision: preview.revision, status: "succeeded", tool: "list_skill_files" },
+  ] } });
+  const replies = saved.mock.calls.map(([message]) => message).filter((message) => message.role === "assistant");
+  const checkpoints = replies.filter((message) => message.status === "generating");
+  expect(checkpoints.some((message) =>
+    Array.isArray(message.metadata?.skill_receipts) && message.metadata.skill_receipts.some((receipt) => receipt.status === "succeeded"))).toBe(true);
+  expect(replies.at(-1)?.metadata?.skill_receipts).toEqual(result.metadata?.skill_receipts);
+});
+
+it("keeps a handoff-only reply successful", async () => {
+  const call = toolCall("mastery_new_session", { path_id: "ratios", opening_message: "复习比", reason: "继续学习" });
+  const { chat, store, configure } = harness(completion([call], "tool_calls"), completion([text(" ")]));
+  await configure();
+  await store.save(createLearningProgress({ book_id: "ratios", name: "比例", modules: [
+    createLearningModule({ id: "mod", name: "化简", order: 0, knowledge_points: [
+      createKnowledgePoint({ id: "reduce", name: "化简", module_id: "mod", type: "procedure" }),
+    ] }),
+  ] }));
+  const result = await chat.sendNew("为我打开一轮精通之路");
+  expect(result.status).toBe("committed");
+  expect(messageHandoffs(result)).toHaveLength(1);
 });

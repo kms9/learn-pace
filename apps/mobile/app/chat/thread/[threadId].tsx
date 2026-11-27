@@ -41,6 +41,7 @@ export default function LittleTutor() {
         ) : (
           <ChatConversation
             key={thread.session.session_id}
+            scope="little_tutor"
             sessionId={thread.session.session_id}
             initialMessages={thread.messages}
             intro={(

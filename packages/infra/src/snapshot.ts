@@ -9,4 +9,9 @@ export async function insertSnapshot(tx: AppStore, snapshot: DatabaseSnapshot): 
   for (const interaction of snapshot.interactions) await tx.insertInteraction(interaction);
   for (const event of snapshot.domain_events) await tx.appendDomainEvent(event);
   for (const card of snapshot.knowledge_cards) await tx.saveKnowledgeCard(card);
+  for (const skill of snapshot.skills) await tx.saveSkill(skill);
+  for (const revision of snapshot.skill_revisions) await tx.saveSkillRevision(revision);
+  for (const binding of snapshot.skill_bindings) await tx.saveSkillBinding(binding);
+  for (const connection of snapshot.provider_connections) await tx.saveProviderConnection(connection);
+  for (const binding of snapshot.source_bindings) await tx.saveSourceBinding(binding);
 }

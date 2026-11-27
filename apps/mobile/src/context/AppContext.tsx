@@ -1,5 +1,5 @@
 import { AppBootstrapService, KnowledgeCardService, LearningHomeService, MistakeReviewService, type BackupRestoreService, type BootstrapSnapshot, type Lf01ChatService,
-  type MasterySessionService, type ReviewReminderService } from "@learn-pace/app-host";
+  type KnowledgeService, type MasterySessionService, type ReviewReminderService, type SkillService } from "@learn-pace/app-host";
 import { systemClock, type Clock } from "@learn-pace/infra";
 import { ExpoLearningStore, expoSecretStore } from "@learn-pace/infra/expo";
 import Constants from "expo-constants";
@@ -21,7 +21,9 @@ type AppContextValue = {
   backup: BackupRestoreService;
   reminders: ReviewReminderService;
   knowledgeCards: KnowledgeCardService;
+  knowledge: KnowledgeService;
   mistakes: MistakeReviewService;
+  skills: SkillService;
   clock: Clock;
   devClock?: { days: number; setDays: (days: number) => void };
   snapshot: BootstrapSnapshot;
@@ -71,14 +73,16 @@ export function AppProvider({ children }: { children: ReactNode }) {
       const backup = service.createBackupRestoreService(Constants.expoConfig?.version ?? mobileConfig.expo.version, sha256Backup);
       const reminders = service.createReviewReminderService(reviewNotifications, clock);
       const knowledgeCards = new KnowledgeCardService(store, clock, randomUUID);
+      const knowledge = service.createKnowledgeService(clock);
       const mistakes = new MistakeReviewService(store);
+      const skills = service.createSkillService(clock);
       const snapshot = await service.snapshot();
       if (!mounted) return;
       const reload = async () => {
         const latest = await service.snapshot();
         if (mounted) setData((current) => current?.service === service ? { ...current, snapshot: latest } : current);
       };
-      setData({ service, chat, mastery, learningHome, backup, reminders, knowledgeCards, mistakes, snapshot, reload,
+      setData({ service, chat, mastery, learningHome, backup, reminders, knowledgeCards, knowledge, mistakes, skills, snapshot, reload,
         inspectDatabase: () => store.inspect() });
     }
     void open().catch(() => {

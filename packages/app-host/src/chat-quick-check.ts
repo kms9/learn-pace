@@ -4,6 +4,8 @@ import { assessSemantically, exactVerdict, generateQuickCheck, QuickCheckGenerat
 import { boundedHistory, ChatTurnError, limitText, type ChatTurns } from "./chat-turns.js";
 import { partReceipt, type Answers } from "./mastery/study.js";
 import type { RestoreGate } from "./restore-gate.js";
+import type { KnowledgeService } from "./extensions/knowledge/knowledge-service.js";
+import { createProvenanceFilter } from "./extensions/knowledge/provenance.js";
 
 interface StoredQuickCheck {
   check_id: string;
@@ -55,6 +57,7 @@ export function publicQuickCheck(message: StoredMessage): PublicQuickCheck | und
 }
 
 export function publicChatMessage(message: StoredMessage): StoredMessage {
+  // 普通问答保留选择和轻量技能收据。自测继续使用独立的白名单投影。
   if (message.metadata?.quick_check === undefined) return message;
   return { ...message, metadata: { quick_check: publicQuickCheck(message) } };
 }
@@ -100,6 +103,7 @@ export class ChatQuickChecks {
     private readonly turns: ChatTurns,
     private readonly restoreGate: RestoreGate,
     private readonly fetch?: typeof globalThis.fetch,
+    private readonly knowledge?: KnowledgeService,
   ) {
     this.running = submissions.get(store) ?? new Map();
     submissions.set(store, this.running);
@@ -116,7 +120,9 @@ export class ChatQuickChecks {
           !source.content.trim() || typeof source.metadata?.source_user_message_id !== "string")) {
         throw new ChatTurnError("请从已完成的回复发起自测");
       }
-      const history = boundedHistory(messages.slice(0, index + 1), 800);
+      const filter = await createProvenanceFilter(this.store, this.knowledge, messages);
+      if (source && !filter(source)) throw new ChatTurnError("该回复来自已断开的知识库，请重新连接或从其他回复发起自测。");
+      const history = boundedHistory(messages.slice(0, index + 1), 800, filter);
       if (!history.length) throw new ChatTurnError("请先完成一轮问答，再生成自测");
       const config = await this.turns.requireModel();
       const generated = await generateQuickCheck(config, {

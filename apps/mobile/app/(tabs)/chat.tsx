@@ -72,12 +72,14 @@ export default function Chat() {
     }
   }
 
-  async function startSession() {
-    const session = await chat.createSession();
+  function sessionStarted(session: StoredSession) {
     setConversation({ session, messages: [] });
     setThreads([]);
     void reload().catch(() => {});
-    return session.session_id;
+  }
+
+  async function startSession() {
+    sessionStarted(await chat.createSession());
   }
 
   async function openSession(id?: string) {
@@ -147,7 +149,8 @@ export default function Chat() {
           key={version}
           sessionId={sessionId}
           initialMessages={conversation?.messages ?? []}
-          startSession={startSession}
+          scope="lf01"
+          onSessionStarted={sessionStarted}
           onFirstMessage={(id, content) => setConversation((current) =>
             current?.session.session_id === id && current.session.model_id === null && current.session.title === "新对话"
               ? { ...current, session: { ...current.session, title: chatTitleFromPrompt(content) } } : current)}

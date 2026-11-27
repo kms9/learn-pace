@@ -1,4 +1,5 @@
 import { ModelSettingsError, RestoreGateError } from "@learn-pace/app-host";
+import { deepSeekOfficialDefaults } from "@learn-pace/runtime";
 import { useRouter } from "expo-router";
 import { useEffect, useRef, useState } from "react";
 import { Keyboard, StyleSheet, Text, TextInput } from "react-native";
@@ -9,15 +10,14 @@ import { Action, Card, Page, styles } from "../../src/components/Shell";
 import { useApp } from "../../src/context/AppContext";
 import { colors, spacing } from "../../src/theme";
 
-const defaultModel = "openai/deepseek-v4.1-flash";
 type Feedback = { message: string; failed?: boolean };
 
 export default function Settings() {
   const { service, snapshot, reload, devClock } = useApp();
   const router = useRouter();
   const saved = snapshot.model.settings;
-  const [baseUrl, setBaseUrl] = useState(saved?.baseUrl ?? "");
-  const [model, setModel] = useState(saved?.model ?? defaultModel);
+  const [baseUrl, setBaseUrl] = useState(saved?.baseUrl ?? deepSeekOfficialDefaults.baseUrl);
+  const [model, setModel] = useState(saved?.model ?? deepSeekOfficialDefaults.model);
   const [apiKey, setApiKey] = useState("");
   const [code, setCode] = useState("");
   const [busy, setBusy] = useState(false);
@@ -26,8 +26,8 @@ export default function Settings() {
   const running = useRef(false);
 
   useEffect(() => {
-    setBaseUrl(saved?.baseUrl ?? "");
-    setModel(saved?.model ?? defaultModel);
+    setBaseUrl(saved?.baseUrl ?? deepSeekOfficialDefaults.baseUrl);
+    setModel(saved?.model ?? deepSeekOfficialDefaults.model);
   }, [saved?.baseUrl, saved?.model]);
 
   async function perform(action: () => Promise<Feedback>) {
@@ -70,7 +70,7 @@ export default function Settings() {
           style={form.input}
           value={baseUrl}
           onChangeText={setBaseUrl}
-          placeholder="https://gateway.example/v1"
+          placeholder={deepSeekOfficialDefaults.baseUrl}
           autoCapitalize="none"
           autoCorrect={false}
           editable={!busy}
@@ -86,6 +86,13 @@ export default function Settings() {
           autoCorrect={false}
           editable={!busy}
         />
+        {(baseUrl !== deepSeekOfficialDefaults.baseUrl || model !== deepSeekOfficialDefaults.model) &&
+          <Action label="使用 DeepSeek 官方配置" secondary disabled={busy} onPress={() => {
+            setBaseUrl(deepSeekOfficialDefaults.baseUrl);
+            setModel(deepSeekOfficialDefaults.model);
+            setApiKey("");
+            setFeedback(undefined);
+          }} />}
         <Text style={styles.body}>API Key</Text>
         <TextInput
           accessibilityLabel="API Key"
@@ -105,6 +112,12 @@ export default function Settings() {
         })} secondary />
         {busy && <Text accessibilityLiveRegion="polite" style={styles.body}>正在处理</Text>}
         {feedback && <Text accessibilityLiveRegion="polite" style={feedback.failed ? form.failure : form.success}>{feedback.message}</Text>}
+      </Card>
+      <Card title="技能">
+        <Action label="技能管理" onPress={() => router.push("/settings/skills")} secondary />
+      </Card>
+      <Card title="知识库">
+        <Action label="管理知识库" onPress={() => router.push("/settings/knowledge")} secondary />
       </Card>
       <BackupCard />
       <ReviewReminderCard />

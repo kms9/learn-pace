@@ -1,6 +1,7 @@
 import type { LearningEvidence } from "@learn-pace/domain";
 import type { AppStore, Clock, StoredInteraction } from "@learn-pace/infra";
 import { interruptedReplies } from "./chat-turns.js";
+import { finalizeTurnReceipts } from "./extensions/turn-scope/receipts.js";
 import { evidenceKey, partReceipt, questionLeaves, ready, savedAnswers, verdictFromEvidence } from "./mastery/study.js";
 
 const sessionKinds = new Set(["lf01", "little_tutor", "mastery"]);
@@ -58,13 +59,15 @@ export class RecoveryService {
   }
 
   async reconcileInTransaction(tx: AppStore): Promise<RecoveryReport> {
+    await tx.deleteInactiveSkillRevisions();
     const report: RecoveryReport = { interruptedMessages: 0, reconciledGradedCards: 0, reconciledPartialCards: 0,
       pendingRetryCards: 0, abandonedDuplicateCards: 0 };
     for (const session of await tx.listSessions()) {
       if (!sessionKinds.has(session.kind)) continue;
       const repairs = interruptedReplies(session, await tx.listMessages(session.session_id));
       for (const message of repairs) {
-        await tx.saveMessage({ ...message, message_id: message.message_id ?? this.makeId() });
+        await tx.saveMessage({ ...message, message_id: message.message_id ?? this.makeId(),
+          metadata: finalizeTurnReceipts(message.metadata, "unknown") });
         report.interruptedMessages++;
       }
     }

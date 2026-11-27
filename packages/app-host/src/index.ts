@@ -22,7 +22,7 @@ export interface ApplicationHost {
 }
 
 export { StudyWorkbench, type StudySnapshot } from "./study-workbench.js";
-export { Lf01ChatError, Lf01ChatService, messageQuotes, type ChatSelection, type ChatQuote } from "./lf01-chat.js";
+export { Lf01ChatError, Lf01ChatService, messageQuotes, type ChatSelection, type ChatQuote, type ChatSendOptions } from "./lf01-chat.js";
 export { publicQuickCheck, quickCheckExcerpt, type PublicQuickCheck } from "./chat-quick-check.js";
 export { renderedChatSelections } from "./chat-selection.js";
 export { chatTitleFromPrompt } from "./chat-turns.js";
@@ -42,3 +42,18 @@ export {
 export * from "./reminders.js";
 export { MistakeReviewService, type Mistake } from "./mistakes.js";
 export { KnowledgeCardService, KnowledgeCardError } from "./knowledge-cards.js";
+export { SkillService, SkillConflictError, type SkillDetail, type SkillPreview, type SkillSummary } from "./extensions/skills/skill-service.js";
+export { SkillPackageError, maxSkillFileBytes } from "./extensions/skills/package-validator.js";
+export { maxSkillArchiveBytes } from "./extensions/skills/zip-reader.js";
+export type { GithubSkillCandidate } from "./extensions/skills/github-source.js";
+export { defaultSkillRegistry, readRegistryLocator, skillRegistries, type SkillRegistry } from "./extensions/skills/registry-origin.js";
+export type { RegistrySkill, RegistrySkillPage } from "./extensions/skills/registry-source.js";
+export type { SkillCompatibility } from "./extensions/skills/compatibility.js";
+export { ExtensionPrepareError } from "./extensions/turn-scope/index.js";
+export { messageSkillSelection, messageSkillReceipts, type SkillReceipt } from "./extensions/turn-scope/receipts.js";
+export { KnowledgeService, type KnowledgeChoice, type PublicKnowledgeConnection } from "./extensions/knowledge/knowledge-service.js";
+export { messageKnowledgeCitations, type KnowledgeCitation } from "./extensions/knowledge/source-ledger.js";
+export { messageKnowledgeReceipts, type KnowledgeReceipt } from "./extensions/knowledge/knowledge-tools.js";
+export { messageKnowledgeSelection, messageKnowledgeProvenance } from "./extensions/knowledge/provenance.js";
+export { hasKnowledgeValue, type KnowledgeBrowsePage, type KnowledgeLibrary, type KnowledgePage } from "./extensions/knowledge/provider.js";
+export { imaSkillName, imaSkillFile } from "./extensions/knowledge/builtin-ima-skill.js";

@@ -1,10 +1,13 @@
 import { VersionConflictError, type AppStore, type Clock, type StoredMessage, type StoredSession } from "@learn-pace/infra";
 import { requestModelId, type AgentRuntime, type ModelConfig, type RuntimeTurnRequest } from "@learn-pace/runtime";
 import { restoreGateFor } from "./restore-gate.js";
+import { finalizeTurnReceipts } from "./extensions/turn-scope/receipts.js";
+import { knowledgeProvenance, unavailableSourceText, type KnowledgeProvenance, type ProvenanceFilter } from "./extensions/knowledge/provenance.js";
 
 export interface ChatQuote {
   text: string;
   source_message_id: string;
+  provenance?: KnowledgeProvenance;
 }
 
 export class ChatTurnError extends Error {}
@@ -12,6 +15,8 @@ export class ChatTurnError extends Error {}
 export type History = NonNullable<RuntimeTurnRequest["history"]>;
 export type MessageObserver = (message: StoredMessage) => void;
 export type ToolActivity = { toolName: string; callId: string; phase: "started" | "finished" };
+const activeTurnsByStore = new WeakMap<AppStore, number>();
+export const hasActiveChatTurns = (store: AppStore) => (activeTurnsByStore.get(store) ?? 0) > 0;
 
 export function limitText(text: string, limit: number): string {
   if (text.length <= limit) return text;
@@ -33,8 +38,9 @@ export function messageQuotes(message: StoredMessage): ChatQuote[] {
   );
 }
 
-function promptWithQuotes(message: StoredMessage): string {
-  const references = messageQuotes(message).map(({ text }, index) => `引用 ${index + 1}：${text}`);
+function promptWithQuotes(message: StoredMessage, filter?: ProvenanceFilter): string {
+  const references = messageQuotes(message).map(({ text, provenance, source_message_id }, index) =>
+    `引用 ${index + 1}：${filter?.(knowledgeProvenance(provenance), source_message_id) === false ? unavailableSourceText : text}`);
   return [...references, message.content].join("\n\n");
 }
 
@@ -58,18 +64,20 @@ export function interruptedReplies(session: StoredSession, messages: readonly St
   return repairs;
 }
 
-export function boundedHistory(messages: readonly StoredMessage[], perMessage = Infinity): History {
+export function boundedHistory(messages: readonly StoredMessage[], perMessage = Infinity, filter?: ProvenanceFilter): History {
   const users = new Map(messages.filter(({ role, status }) => role === "user" && status === "committed")
     .map((message) => [message.message_id, message]));
   const history: History[number][] = [];
   let budget = 12_000;
   for (let index = messages.length - 1; index >= 0 && history.length < 12; index--) {
     const reply = messages[index]!;
-    if (reply.role !== "assistant" || reply.status !== "committed") continue;
+    if (reply.role !== "assistant" || reply.status !== "committed" ||
+        (!reply.content.trim() && (Array.isArray(reply.metadata?.skill_receipts) || Array.isArray(reply.metadata?.knowledge_receipts)) &&
+          !reply.metadata?.handoffs)) continue;
     const user = users.get(sourceId(reply) ?? "");
     if (!user) continue;
-    const question = limitText(promptWithQuotes(user), perMessage);
-    const answer = limitText(reply.content, perMessage);
+    const question = limitText(promptWithQuotes(user, filter), perMessage);
+    const answer = limitText(filter?.(reply) === false ? unavailableSourceText : reply.content, perMessage);
     const size = Array.from(question).length + Array.from(answer).length;
     if (size > budget) break;
     budget -= size;
@@ -110,7 +118,11 @@ export type PrepareTurn = (session: StoredSession, config: ModelConfig, context:
   allowedTools?: readonly string[];
   toolSettled?: () => void;
   onToolActivity?: (activity: ToolActivity | null) => void;
-  replyMetadata?: () => Record<string, unknown> | undefined;
+  publishToolProgress?: boolean;
+  businessMetadata?: () => Record<string, unknown> | undefined;
+  auditMetadata?: () => Record<string, unknown> | undefined;
+  holdText?: () => boolean;
+  finalizeTurn?: (reply: Pick<StoredMessage, "content" | "status">) => { content: string; metadata?: Record<string, unknown> };
   measure?: boolean;
 }>;
 
@@ -143,10 +155,14 @@ export class ChatTurns {
       if (this.active.has(scope)) throw new ChatTurnError(busy);
       const controller = new AbortController();
       this.active.set(scope, { session, controller });
+      activeTurnsByStore.set(this.store, (activeTurnsByStore.get(this.store) ?? 0) + 1);
       try {
         return await action(controller.signal);
       } finally {
         this.active.delete(scope);
+        const remaining = (activeTurnsByStore.get(this.store) ?? 1) - 1;
+        if (remaining) activeTurnsByStore.set(this.store, remaining);
+        else activeTurnsByStore.delete(this.store);
       }
     });
   }
@@ -162,7 +178,7 @@ export class ChatTurns {
   }
 
   async send(session: StoredSession, content: string, quotes: readonly ChatQuote[], prepare: PrepareTurn,
-    signal: AbortSignal, onMessage?: MessageObserver, metadata?: Record<string, unknown>) {
+    signal: AbortSignal, onMessage?: MessageObserver, metadata?: Record<string, unknown>, filter?: ProvenanceFilter) {
     const sessionId = session.session_id;
     const messages = await this.store.listMessages(sessionId);
     const config = await this.requireModel();
@@ -176,7 +192,8 @@ export class ChatTurns {
       metadata: {
         ...metadata,
         model_id: modelId,
-        quotes: quotes.map(({ text, source_message_id }) => ({ text: limitText(text, 2_000), source_message_id })),
+        quotes: quotes.map(({ text, source_message_id, provenance }) => ({ text: limitText(text, 2_000), source_message_id,
+          ...(provenance && { provenance: knowledgeProvenance(provenance) }) })),
       },
     };
     const reply: StoredMessage = {
@@ -186,11 +203,11 @@ export class ChatTurns {
     };
     await this.store.saveMessage(user);
     this.publish(user, onMessage);
-    return this.generate(session, config, user, reply, boundedHistory(messages), prepare, signal, onMessage);
+    return this.generate(session, config, user, reply, boundedHistory(messages, Infinity, filter), prepare, signal, onMessage, filter);
   }
 
   async repeat(session: StoredSession, replyId: string, action: "retry" | "regenerate", prepare: PrepareTurn,
-    signal: AbortSignal, onMessage?: MessageObserver) {
+    signal: AbortSignal, onMessage?: MessageObserver, filter?: ProvenanceFilter) {
     const messages = await this.store.listMessages(session.session_id);
     const { user, reply, userIndex } = turnFrom(messages, replyId);
     const allowed = action === "retry"
@@ -203,7 +220,7 @@ export class ChatTurns {
     return this.generate(session, config, user, {
       ...reply, content: "", status: "generating", turn_id: this.makeId(),
       metadata: { source_user_message_id: user.message_id, model_id: requestModelId(config) },
-    }, boundedHistory(messages.slice(0, userIndex)), prepare, signal, onMessage);
+    }, boundedHistory(messages.slice(0, userIndex), Infinity, filter), prepare, signal, onMessage, filter);
   }
 
   async requireModel(): Promise<ModelConfig> {
@@ -221,6 +238,7 @@ export class ChatTurns {
     prepare: PrepareTurn,
     signal: AbortSignal,
     onMessage?: MessageObserver,
+    filter?: ProvenanceFilter,
   ): Promise<StoredMessage> {
     await this.store.saveMessage(reply);
     this.publish(reply, onMessage);
@@ -240,7 +258,8 @@ export class ChatTurns {
         if (error instanceof VersionConflictError) conflict = error;
         return undefined;
       });
-    const { runtime, options, allowedTools = [], toolSettled, onToolActivity, replyMetadata, measure } = prepared ?? {};
+    const { runtime, options, allowedTools = [], toolSettled, onToolActivity, publishToolProgress, businessMetadata, auditMetadata,
+      holdText, finalizeTurn, measure } = prepared ?? {};
     const started = performance.now();
     let ttft: number | null = null;
     const rounds: { input: number | null; output: number | null }[] = [];
@@ -249,8 +268,15 @@ export class ChatTurns {
     let error: string | undefined;
     let savedAt: number | undefined;
     let writes = Promise.resolve();
+    const checkpoint = (text: string) => {
+      // 取值发生在由写入队列排序之后，较早的 checkpoint 也不会回写过时的收据。
+      writes = writes.then(() => this.store.saveMessage({
+        ...reply, content: text, metadata: { ...reply.metadata, ...auditMetadata?.() },
+      })).catch(() => {});
+    };
+    if (auditMetadata?.()) checkpoint(content);
     await runtime?.runTurn({
-      sessionId: session.session_id, turnId: reply.turn_id!, prompt: promptWithQuotes(user),
+      sessionId: session.session_id, turnId: reply.turn_id!, prompt: promptWithQuotes(user, filter),
       ...options, allowedTools, history, signal,
       ...(measure && { onModelRound: (round: Parameters<NonNullable<RuntimeTurnRequest["onModelRound"]>>[0]) => {
         rounds.push({ input: round.promptTokens ?? null, output: round.completionTokens ?? null });
@@ -259,20 +285,24 @@ export class ChatTurns {
       if (measure && (event.type === "text_delta" || event.type === "tool_call")) ttft ??= Math.round(performance.now() - started);
       if (event.type === "tool_call" || event.type === "tool_result") {
         onToolActivity?.({ toolName: event.toolName, callId: event.callId, phase: event.type === "tool_call" ? "started" : "finished" });
+        if (auditMetadata) checkpoint(content);
+        if (publishToolProgress && event.toolName.startsWith("knowledge_")) {
+          this.publish({ ...reply, content, metadata: { ...reply.metadata, ...auditMetadata?.() } }, onMessage);
+        }
       }
-      if (event.type === "text_delta") {
+      if (event.type === "text_delta" && !holdText?.()) {
         content += event.delta;
-        const partial = { ...reply, content };
+        const partial = { ...reply, content, metadata: { ...reply.metadata, ...auditMetadata?.() } };
         const now = this.clock.nowSeconds();
         if (savedAt === undefined || now - savedAt >= 1) {
           savedAt = now;
-          // A later checkpoint can still succeed after a temporary write failure.
-          writes = writes.then(() => this.store.saveMessage(partial)).catch(() => {});
+          checkpoint(content);
         }
         this.publish(partial, onMessage);
       }
       if (event.type === "turn_completed") {
-        if ((event.stopReason === "end_turn" && (content.trim() || replyMetadata?.())) || event.stopReason === "tool_terminated" ||
+        if ((event.stopReason === "end_turn" && (content.trim() || Object.keys(businessMetadata?.() ?? {}).length ||
+          (finalizeTurn && holdText?.()))) || event.stopReason === "tool_terminated" ||
           event.stopReason === "question_presented") status = "committed";
         if (event.stopReason === "cancelled") status = "interrupted";
       }
@@ -286,11 +316,15 @@ export class ChatTurns {
       }
     }).catch(() => {}).finally(() => onToolActivity?.(null));
     await writes;
+    const final = finalizeTurn?.({ content, status });
+    const metadata = { ...reply.metadata, ...businessMetadata?.(), ...auditMetadata?.(), ...final?.metadata,
+      ...(status === "failed" ? { error: conflict?.message ?? localizedFailure(error ?? "") } : {}),
+      ...(measure && { runtime: { ttft_ms: ttft, total_ms: Math.round(performance.now() - started), rounds, tools } }),
+    };
     const terminal: StoredMessage = {
-      ...reply, content, status,
-      metadata: { ...reply.metadata, ...replyMetadata?.(), ...(status === "failed" ? { error: conflict?.message ?? localizedFailure(error ?? "") } : {}),
-        ...(measure && { runtime: { ttft_ms: ttft, total_ms: Math.round(performance.now() - started), rounds, tools } }),
-      },
+      ...reply, content: final?.content ?? content, status,
+      metadata: status === "interrupted" ? finalizeTurnReceipts(metadata, "interrupted") :
+        status === "failed" ? finalizeTurnReceipts(metadata, "unknown") : metadata,
     };
     await this.store.saveMessage(terminal);
     this.publish(terminal, onMessage);

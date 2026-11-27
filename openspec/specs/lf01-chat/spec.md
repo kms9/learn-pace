@@ -54,15 +54,23 @@ The system SHALL let the learner add a selected passage from a message to the cu
 - **THEN** 输入框上方出现该引用条；发送后用户消息显示引用条，请求中引用以带编号的形式放在问题之前
 
 ### Requirement: Chat tool isolation and mastery boundary
-问答回合 SHALL 仅使用只读的精通之路导航工具（`mastery_topics`、`mastery_sessions`、`mastery_open_session`、`mastery_new_session`）。小老师回合的工具白名单 SHALL 为空。两类回合均 MUST NOT 写入任何学习证据或掌握状态。
+问答 SHALL 仅注册只读精通导航工具（`mastery_topics`、`mastery_sessions`、`mastery_open_session`、`mastery_new_session`）及本轮获准的只读 Skill 和知识工具。Skill 工具 SHALL 受 `lf01` 或 `little_tutor` 作用域及本轮快照约束。已加载 Skill 时才可使用 `list_skill_files`、`read_skill_file`，自动发现门禁通过时才可追加 `list_local_skills`、`load_skill`。本轮绑定有效库时 SHALL 追加 `knowledge_list`、`knowledge_search`、`knowledge_read`，小老师可继承父会话锚点回合的绑定。小老师仅可使用获准的只读 Skill 和知识工具，无适用 Skill 且无有效绑定时工具白名单 SHALL 为空。两类回合均 MUST NOT 注册写入、上传、脚本执行或未授权外部网络工具，也 MUST NOT 写入学习证据或掌握状态。
 
 #### Scenario: Ordinary chat does not change mastery
-- **WHEN** 用户在问答中提问或表示「我懂了」
-- **THEN** 只保存会话记录，不写入任何精通之路的证据或掌握状态
+- **WHEN** 用户在问答中提问、使用已启用教学 Skill、结合外部知识库问答或表示「我懂了」
+- **THEN** 只保存会话记录、轻量收据与离线引用快照，不写入任何精通之路的证据或掌握状态
 
 #### Scenario: Side chat has no tools
-- **WHEN** 用户在小老师侧聊中追问
-- **THEN** 请求不携带任何工具
+- **WHEN** `little_tutor` 作用域未启用任何 Skill 且父会话回合未绑定外部知识库，用户在小老师侧聊中追问
+- **THEN** 请求工具白名单为空，不携带任何工具
+
+#### Scenario: Side chat with an enabled skill only receives read-only skill tools
+- **WHEN** 用户将某教学 Skill 启用并绑定至 `little_tutor` 作用域（且无绑定知识库）后在小老师侧聊中追问
+- **THEN** 该回合仅允许调用受本轮快照约束的只读 Skill 工具，不包含精通导航工具且不写回父会话或任何掌握状态
+
+#### Scenario: Chat or side chat with a bound knowledge base only receives read-only knowledge tools
+- **WHEN** 用户在问答选定已绑定知识库（或从该回合发起小老师追问）并发送消息
+- **THEN** 该回合仅追加注册只读知识工具（`knowledge_list`、`knowledge_search`、`knowledge_read`），绝不注册文件上传或 URL 导入等写入工具，且不写入任何学习证据或掌握状态
 
 ### Requirement: Turning a message into a learning goal
 The system SHALL let the learner start goal creation from a message, navigating to `mastery/new` with `sourceSessionId`, `sourceMessageId`, and `sourceExcerpt` (confirmed selection or the whole message, at most 600 Unicode code points), without marking anything as mastered.

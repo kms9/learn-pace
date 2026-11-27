@@ -4,7 +4,7 @@ interface MigrationDatabase {
   getAllAsync<T>(sql: string): Promise<T[]>;
 }
 
-export const databaseSchemaVersion = 6;
+export const databaseSchemaVersion = 9;
 
 export async function migrateLearningDatabase(db: MigrationDatabase): Promise<void> {
   await db.execAsync("PRAGMA journal_mode = WAL");
@@ -16,7 +16,126 @@ export async function migrateLearningDatabase(db: MigrationDatabase): Promise<vo
   if (version < 3) await migrateV3(db);
   if (version < 4) await migrateV4(db);
   if (version < 5) await migrateV5(db);
-  await migrateV6(db);
+  if (version < 6) await migrateV6(db);
+  if (version < 7) await migrateV7(db);
+  if (version < 8) await migrateV8(db);
+  await migrateV9(db);
+}
+
+function skillTableSchema(name: "skills" | "skills_v9"): string {
+  const registry = name === "skills_v9" ? ", 'registry'" : "";
+  return `CREATE TABLE IF NOT EXISTS ${name} (
+    skill_id TEXT PRIMARY KEY NOT NULL,
+    name TEXT NOT NULL,
+    description TEXT NOT NULL,
+    origin_kind TEXT NOT NULL CHECK (origin_kind IN ('local_file', 'local_zip', 'github'${registry})),
+    origin_locator TEXT NOT NULL,
+    source_url TEXT,
+    pinned_ref TEXT,
+    active_revision TEXT NOT NULL,
+    enabled INTEGER NOT NULL DEFAULT 0 CHECK (enabled IN (0, 1)),
+    user_invocable INTEGER NOT NULL DEFAULT 1 CHECK (user_invocable IN (0, 1)),
+    disable_model_invocation INTEGER NOT NULL DEFAULT 0 CHECK (disable_model_invocation IN (0, 1)),
+    compatibility_json TEXT NOT NULL,
+    metadata_json TEXT NOT NULL,
+    created_at REAL NOT NULL,
+    updated_at REAL NOT NULL
+  );`;
+}
+
+async function migrateV9(db: MigrationDatabase): Promise<void> {
+  await db.execAsync("BEGIN IMMEDIATE");
+  try {
+    await db.execAsync(`
+      ${skillTableSchema("skills_v9")}
+      INSERT INTO skills_v9 SELECT * FROM skills;
+      DROP TABLE skills;
+      ALTER TABLE skills_v9 RENAME TO skills;
+      CREATE UNIQUE INDEX skills_origin_unique ON skills (origin_kind, origin_locator);
+      PRAGMA user_version = 9;
+    `);
+    await db.execAsync("COMMIT");
+  } catch (error) {
+    await db.execAsync("ROLLBACK").catch(() => {});
+    throw error;
+  }
+}
+
+async function migrateV8(db: MigrationDatabase): Promise<void> {
+  await db.execAsync("BEGIN IMMEDIATE");
+  try {
+    await db.execAsync(`
+      CREATE TABLE IF NOT EXISTS provider_connections (
+        connection_id TEXT PRIMARY KEY NOT NULL,
+        provider TEXT NOT NULL CHECK (provider IN ('ima')),
+        display_name TEXT NOT NULL,
+        status TEXT NOT NULL CHECK (status IN ('disconnected', 'ready', 'auth_denied', 'error')),
+        credential_ref TEXT,
+        last_error TEXT,
+        created_at REAL NOT NULL,
+        updated_at REAL NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS source_bindings (
+        binding_id TEXT PRIMARY KEY NOT NULL,
+        connection_id TEXT NOT NULL,
+        provider TEXT NOT NULL CHECK (provider IN ('ima')),
+        remote_kb_id TEXT NOT NULL,
+        name TEXT NOT NULL,
+        description TEXT NOT NULL DEFAULT '',
+        base_type TEXT NOT NULL DEFAULT '',
+        role_type TEXT NOT NULL DEFAULT '',
+        writable INTEGER NOT NULL DEFAULT 0 CHECK (writable IN (0, 1)),
+        enabled INTEGER NOT NULL DEFAULT 1 CHECK (enabled IN (0, 1)),
+        created_at REAL NOT NULL,
+        updated_at REAL NOT NULL
+      );
+      CREATE UNIQUE INDEX IF NOT EXISTS source_bindings_connection_kb_unique
+        ON source_bindings (connection_id, remote_kb_id);
+      CREATE INDEX IF NOT EXISTS source_bindings_by_connection ON source_bindings (connection_id, updated_at DESC);
+      PRAGMA user_version = 8;
+    `);
+    await db.execAsync("COMMIT");
+  } catch (error) {
+    await db.execAsync("ROLLBACK").catch(() => {});
+    throw error;
+  }
+}
+
+async function migrateV7(db: MigrationDatabase): Promise<void> {
+  await db.execAsync("BEGIN IMMEDIATE");
+  try {
+    await db.execAsync(`
+      ${skillTableSchema("skills")}
+      CREATE UNIQUE INDEX IF NOT EXISTS skills_origin_unique
+        ON skills (origin_kind, origin_locator);
+      CREATE TABLE IF NOT EXISTS skill_revisions (
+        skill_id TEXT NOT NULL,
+        revision TEXT NOT NULL,
+        manifest_json TEXT NOT NULL,
+        files_json_base64 TEXT NOT NULL,
+        raw_bytes INTEGER NOT NULL,
+        instructions_chars INTEGER NOT NULL,
+        created_at REAL NOT NULL,
+        PRIMARY KEY (skill_id, revision)
+      );
+      CREATE INDEX IF NOT EXISTS skill_revisions_by_skill
+        ON skill_revisions (skill_id, created_at DESC);
+      CREATE TABLE IF NOT EXISTS skill_bindings (
+        skill_id TEXT NOT NULL,
+        scope TEXT NOT NULL CHECK (scope IN ('lf01', 'little_tutor')),
+        enabled INTEGER NOT NULL DEFAULT 0 CHECK (enabled IN (0, 1)),
+        updated_at REAL NOT NULL,
+        PRIMARY KEY (skill_id, scope)
+      );
+      CREATE INDEX IF NOT EXISTS skill_bindings_by_scope
+        ON skill_bindings (scope, enabled, skill_id);
+      PRAGMA user_version = 7;
+    `);
+    await db.execAsync("COMMIT");
+  } catch (error) {
+    await db.execAsync("ROLLBACK").catch(() => {});
+    throw error;
+  }
 }
 
 async function migrateV6(db: MigrationDatabase): Promise<void> {

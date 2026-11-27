@@ -5,6 +5,8 @@ import {
   SubmissionConflictError, VersionConflictError,
   type AppStore, type DatabaseSnapshot, type PathSummaryRecord, type SecretStore, type StoredDomainEvent, type StoredInteraction,
   type KnowledgeCardFilter, type StoredKnowledgeCard, type StoredMessage, type StoredSession, type StoredThread,
+  type SkillScope, type SkillScopeEntry, type StoredSkill, type StoredSkillRevision, type StoredSkillBinding,
+  type StoredProviderConnection, type StoredSourceBinding,
 } from "./index.js";
 import { searchKnowledgeCards } from "./knowledge-card-search.js";
 import { migrateLearningDatabase } from "./migrations.js";
@@ -74,15 +76,26 @@ export class ExpoLearningStore implements AppStore {
     const interactions = await this.db.getAllAsync<InteractionRow>("SELECT * FROM interactions ORDER BY interaction_id");
     const events = await this.db.getAllAsync<DomainEventRow>("SELECT * FROM domain_events ORDER BY rowid");
     const cards = await this.db.getAllAsync<StoredKnowledgeCard>("SELECT * FROM knowledge_cards ORDER BY card_id");
+    const skills = await this.listSkills();
+    const revisions = await this.db.getAllAsync<StoredSkillRevision>("SELECT * FROM skill_revisions ORDER BY skill_id, revision");
+    const bindings = await this.db.getAllAsync<StoredSkillBinding>("SELECT * FROM skill_bindings ORDER BY skill_id, scope");
+    const connections = await this.listProviderConnections();
+    const sourceBindings = await this.db.getAllAsync<StoredSourceBinding>("SELECT * FROM source_bindings ORDER BY binding_id");
     return { settings, learning_progress: paths.map(({ progress, version, status }) => ({
       progress: { ...JSON.parse(progress) as LearningProgress, version }, status,
     })), sessions, messages: messages.map(decodeMessage), session_threads: threads,
-    interactions: interactions.map(decodeInteraction), domain_events: events.map(decodeDomainEvent), knowledge_cards: cards };
+    interactions: interactions.map(decodeInteraction), domain_events: events.map(decodeDomainEvent), knowledge_cards: cards,
+    skills, skill_revisions: revisions, skill_bindings: bindings, provider_connections: connections, source_bindings: sourceBindings };
   }
 
   async replaceSnapshot(snapshot: DatabaseSnapshot, afterReplace?: (tx: AppStore) => Promise<void>): Promise<void> {
     if (this.writes) return this.runInTransaction((tx) => tx.replaceSnapshot(snapshot, afterReplace));
     await this.db.execAsync(`
+      DELETE FROM source_bindings;
+      DELETE FROM provider_connections;
+      DELETE FROM skill_bindings;
+      DELETE FROM skill_revisions;
+      DELETE FROM skills;
       DELETE FROM knowledge_cards;
       DELETE FROM domain_events;
       DELETE FROM interactions;
@@ -94,6 +107,134 @@ export class ExpoLearningStore implements AppStore {
     `);
     await insertSnapshot(this, snapshot);
     await afterReplace?.(this);
+  }
+
+  getProviderConnection(id: string): Promise<StoredProviderConnection | null> {
+    return this.db.getFirstAsync<StoredProviderConnection>("SELECT * FROM provider_connections WHERE connection_id = ?", id);
+  }
+
+  listProviderConnections(): Promise<StoredProviderConnection[]> {
+    return this.db.getAllAsync<StoredProviderConnection>("SELECT * FROM provider_connections ORDER BY connection_id");
+  }
+
+  async saveProviderConnection(row: StoredProviderConnection): Promise<void> {
+    await this.run(`INSERT INTO provider_connections
+      (connection_id, provider, display_name, status, credential_ref, last_error, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT (connection_id) DO UPDATE SET
+      display_name = excluded.display_name, status = excluded.status, credential_ref = excluded.credential_ref,
+      last_error = excluded.last_error, created_at = excluded.created_at, updated_at = excluded.updated_at`,
+    row.connection_id, row.provider, row.display_name, row.status, row.credential_ref, row.last_error, row.created_at, row.updated_at);
+  }
+
+  async deleteProviderConnection(id: string): Promise<void> {
+    if (this.writes) return this.runInTransaction((tx) => tx.deleteProviderConnection(id));
+    await this.run("DELETE FROM source_bindings WHERE connection_id = ?", id);
+    await this.run("DELETE FROM provider_connections WHERE connection_id = ?", id);
+  }
+
+  getSourceBinding(id: string): Promise<StoredSourceBinding | null> {
+    return this.db.getFirstAsync<StoredSourceBinding>("SELECT * FROM source_bindings WHERE binding_id = ?", id);
+  }
+
+  listSourceBindings(connectionId?: string): Promise<StoredSourceBinding[]> {
+    const order = " ORDER BY updated_at DESC, binding_id";
+    return connectionId === undefined
+      ? this.db.getAllAsync<StoredSourceBinding>("SELECT * FROM source_bindings" + order)
+      : this.db.getAllAsync<StoredSourceBinding>("SELECT * FROM source_bindings WHERE connection_id = ?" + order, connectionId);
+  }
+
+  async saveSourceBinding(row: StoredSourceBinding): Promise<void> {
+    const result = await this.run(`INSERT INTO source_bindings
+      (binding_id, connection_id, provider, remote_kb_id, name, description, base_type, role_type,
+        writable, enabled, created_at, updated_at)
+      SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+      WHERE EXISTS (SELECT 1 FROM provider_connections WHERE connection_id = ? AND provider = ?)
+      ON CONFLICT (binding_id) DO UPDATE SET name = excluded.name, description = excluded.description,
+        base_type = excluded.base_type, role_type = excluded.role_type, writable = excluded.writable,
+        enabled = excluded.enabled, created_at = excluded.created_at, updated_at = excluded.updated_at
+      WHERE source_bindings.connection_id = excluded.connection_id AND source_bindings.remote_kb_id = excluded.remote_kb_id`,
+    row.binding_id, row.connection_id, row.provider, row.remote_kb_id, row.name, row.description, row.base_type,
+    row.role_type, row.writable, row.enabled, row.created_at, row.updated_at, row.connection_id, row.provider);
+    if (!result.changes) throw new Error("知识库连接不存在或绑定身份冲突");
+  }
+
+  async deleteSourceBinding(id: string): Promise<void> {
+    await this.run("DELETE FROM source_bindings WHERE binding_id = ?", id);
+  }
+
+  getSkill(skillId: string): Promise<StoredSkill | null> {
+    return this.db.getFirstAsync<StoredSkill>("SELECT * FROM skills WHERE skill_id = ?", skillId);
+  }
+
+  listSkills(): Promise<StoredSkill[]> {
+    return this.db.getAllAsync<StoredSkill>("SELECT * FROM skills ORDER BY skill_id");
+  }
+
+  async saveSkill(s: StoredSkill): Promise<void> {
+    await this.run(`
+      INSERT INTO skills (skill_id, name, description, origin_kind, origin_locator, source_url, pinned_ref,
+        active_revision, enabled, user_invocable, disable_model_invocation, compatibility_json, metadata_json, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT (skill_id) DO UPDATE SET name = excluded.name, description = excluded.description,
+        origin_kind = excluded.origin_kind, origin_locator = excluded.origin_locator, source_url = excluded.source_url,
+        pinned_ref = excluded.pinned_ref, active_revision = excluded.active_revision, enabled = excluded.enabled,
+        user_invocable = excluded.user_invocable, disable_model_invocation = excluded.disable_model_invocation,
+        compatibility_json = excluded.compatibility_json, metadata_json = excluded.metadata_json,
+        created_at = excluded.created_at, updated_at = excluded.updated_at
+    `, s.skill_id, s.name, s.description, s.origin_kind, s.origin_locator, s.source_url, s.pinned_ref,
+    s.active_revision, s.enabled, s.user_invocable, s.disable_model_invocation, s.compatibility_json, s.metadata_json,
+    s.created_at, s.updated_at);
+  }
+
+  async deleteSkill(skillId: string): Promise<void> {
+    if (this.writes) return this.runInTransaction((tx) => tx.deleteSkill(skillId));
+    await this.run("DELETE FROM skill_bindings WHERE skill_id = ?", skillId);
+    await this.run("DELETE FROM skills WHERE skill_id = ?", skillId);
+  }
+
+  getSkillRevision(skillId: string, revision: string): Promise<StoredSkillRevision | null> {
+    return this.db.getFirstAsync<StoredSkillRevision>("SELECT * FROM skill_revisions WHERE skill_id = ? AND revision = ?", skillId, revision);
+  }
+
+  async saveSkillRevision(row: StoredSkillRevision): Promise<void> {
+    await this.run(`
+      INSERT INTO skill_revisions (skill_id, revision, manifest_json, files_json_base64, raw_bytes, instructions_chars, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT (skill_id, revision) DO UPDATE SET
+        manifest_json = excluded.manifest_json, files_json_base64 = excluded.files_json_base64,
+        raw_bytes = excluded.raw_bytes, instructions_chars = excluded.instructions_chars, created_at = excluded.created_at
+    `, row.skill_id, row.revision, row.manifest_json, row.files_json_base64, row.raw_bytes, row.instructions_chars, row.created_at);
+  }
+
+  async skillLibraryBytes(): Promise<number> {
+    const row = await this.db.getFirstAsync<{ bytes: number }>("SELECT COALESCE(SUM(raw_bytes), 0) AS bytes FROM skill_revisions");
+    return row?.bytes ?? 0;
+  }
+
+  async deleteInactiveSkillRevisions(): Promise<void> {
+    await this.run(`DELETE FROM skill_revisions AS r WHERE NOT EXISTS
+      (SELECT 1 FROM skills AS s WHERE s.skill_id = r.skill_id AND s.active_revision = r.revision)`);
+  }
+
+  listSkillBindings(skillId: string): Promise<StoredSkillBinding[]> {
+    return this.db.getAllAsync<StoredSkillBinding>("SELECT * FROM skill_bindings WHERE skill_id = ? ORDER BY scope", skillId);
+  }
+
+  async saveSkillBinding(row: StoredSkillBinding): Promise<void> {
+    await this.run(`
+      INSERT INTO skill_bindings (skill_id, scope, enabled, updated_at) VALUES (?, ?, ?, ?)
+      ON CONFLICT (skill_id, scope) DO UPDATE SET enabled = excluded.enabled, updated_at = excluded.updated_at
+    `, row.skill_id, row.scope, row.enabled, row.updated_at);
+  }
+
+  async scopeSnapshot(scope: SkillScope): Promise<SkillScopeEntry[]> {
+    // A single SQLite statement reads all three tables from the same read snapshot.
+    const rows = await this.db.getAllAsync<StoredSkill & Pick<SkillScopeEntry, "binding" | "manifest">>(`
+      SELECT s.*, b.enabled AS binding, r.manifest_json AS manifest FROM skills AS s
+      LEFT JOIN skill_bindings AS b ON b.skill_id = s.skill_id AND b.scope = ?
+      LEFT JOIN skill_revisions AS r ON r.skill_id = s.skill_id AND r.revision = s.active_revision
+      ORDER BY s.skill_id
+    `, scope);
+    return rows.map(({ binding, manifest, ...skill }) => ({ skill, binding, manifest }));
   }
 
   static async open(): Promise<ExpoLearningStore> {

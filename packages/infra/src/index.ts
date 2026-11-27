@@ -194,6 +194,102 @@ export interface KnowledgeCardStore {
   detachKnowledgeCardsByPath(pathId: string, now: number): Promise<void>;
 }
 
+export type SkillScope = "lf01" | "little_tutor";
+export type SkillOriginKind = "local_file" | "local_zip" | "github" | "registry";
+export type StoredFlag = 0 | 1;
+
+export interface StoredSkill {
+  skill_id: string;
+  name: string;
+  description: string;
+  origin_kind: SkillOriginKind;
+  origin_locator: string;
+  source_url: string | null;
+  pinned_ref: string | null;
+  active_revision: string;
+  enabled: StoredFlag;
+  user_invocable: StoredFlag;
+  disable_model_invocation: StoredFlag;
+  compatibility_json: string;
+  metadata_json: string;
+  created_at: number;
+  updated_at: number;
+}
+
+export interface StoredSkillRevision {
+  skill_id: string;
+  revision: string;
+  manifest_json: string;
+  files_json_base64: string;
+  raw_bytes: number;
+  instructions_chars: number;
+  created_at: number;
+}
+
+export interface StoredSkillBinding {
+  skill_id: string;
+  scope: SkillScope;
+  enabled: StoredFlag;
+  updated_at: number;
+}
+
+export interface SkillScopeEntry {
+  skill: StoredSkill;
+  binding: StoredFlag | null;
+  manifest: string | null;
+}
+
+export interface SkillStore {
+  getSkill(skillId: string): Promise<StoredSkill | null>;
+  listSkills(): Promise<StoredSkill[]>;
+  saveSkill(skill: StoredSkill): Promise<void>;
+  deleteSkill(skillId: string): Promise<void>;
+  getSkillRevision(skillId: string, revision: string): Promise<StoredSkillRevision | null>;
+  saveSkillRevision(revision: StoredSkillRevision): Promise<void>;
+  skillLibraryBytes(): Promise<number>;
+  deleteInactiveSkillRevisions(): Promise<void>;
+  listSkillBindings(skillId: string): Promise<StoredSkillBinding[]>;
+  saveSkillBinding(binding: StoredSkillBinding): Promise<void>;
+  scopeSnapshot(scope: SkillScope): Promise<SkillScopeEntry[]>;
+}
+
+export interface StoredProviderConnection {
+  connection_id: string;
+  provider: "ima";
+  display_name: string;
+  status: "disconnected" | "ready" | "auth_denied" | "error";
+  credential_ref: string | null;
+  last_error: string | null;
+  created_at: number;
+  updated_at: number;
+}
+
+export interface StoredSourceBinding {
+  binding_id: string;
+  connection_id: string;
+  provider: StoredProviderConnection["provider"];
+  remote_kb_id: string;
+  name: string;
+  description: string;
+  base_type: string;
+  role_type: string;
+  writable: StoredFlag;
+  enabled: StoredFlag;
+  created_at: number;
+  updated_at: number;
+}
+
+export interface KnowledgeStore {
+  getProviderConnection(id: string): Promise<StoredProviderConnection | null>;
+  listProviderConnections(): Promise<StoredProviderConnection[]>;
+  saveProviderConnection(connection: StoredProviderConnection): Promise<void>;
+  deleteProviderConnection(id: string): Promise<void>;
+  getSourceBinding(id: string): Promise<StoredSourceBinding | null>;
+  listSourceBindings(connectionId?: string): Promise<StoredSourceBinding[]>;
+  saveSourceBinding(binding: StoredSourceBinding): Promise<void>;
+  deleteSourceBinding(id: string): Promise<void>;
+}
+
 export interface DatabaseSnapshot {
   settings: { name: string; value: string }[];
   learning_progress: { progress: LearningProgress; status: PathStatus }[];
@@ -203,9 +299,15 @@ export interface DatabaseSnapshot {
   session_threads: StoredThread[];
   domain_events: StoredDomainEvent[];
   knowledge_cards: StoredKnowledgeCard[];
+  skills: StoredSkill[];
+  skill_revisions: StoredSkillRevision[];
+  skill_bindings: StoredSkillBinding[];
+  provider_connections: StoredProviderConnection[];
+  source_bindings: StoredSourceBinding[];
 }
 
-export interface AppStore extends SettingsStore, LearningProgressStore, InteractionStore, SessionStore, MessageStore, ThreadStore, KnowledgeCardStore {
+export interface AppStore extends SettingsStore, LearningProgressStore, InteractionStore, SessionStore, MessageStore,
+  ThreadStore, KnowledgeCardStore, SkillStore, KnowledgeStore {
   /** 所有事务内读写都使用 tx。嵌套事务复用 tx，随外层事务一起提交或回滚。 */
   runInTransaction<T>(work: (tx: AppStore) => Promise<T>): Promise<T>;
   exportSnapshot(): Promise<DatabaseSnapshot>;

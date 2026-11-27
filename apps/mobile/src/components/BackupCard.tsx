@@ -41,7 +41,7 @@ export function BackupCard() {
   const summary = preview?.summary;
 
   return <Card title="数据备份与恢复">
-    <Text style={styles.body}>备份包含本地学习记录和模型设置，不包含 API Key。</Text>
+    <Text style={styles.body}>备份包含本地学习记录、技能、知识库绑定与模型设置。凭据保存在本机安全存储。</Text>
     <Action label="导出本地备份" disabled={busy} onPress={() => void perform(async () => {
       await shareBackup(await backup.exportBackup());
       setMessage({ text: "备份文件已生成。" });
@@ -56,9 +56,13 @@ export function BackupCard() {
         <Text style={styles.body}>导出时间 {new Date(summary.exportedAt * 1000).toLocaleString()}</Text>
         <Text style={styles.body}>路径 {summary.counts.paths} · 会话 {summary.counts.sessions} · 消息 {summary.counts.messages}</Text>
         <Text style={styles.body}>小老师 {summary.counts.threads} · 题卡 {summary.counts.interactions} · 证据 {summary.counts.evidence}</Text>
-        <Text style={styles.body}>知识卡 {summary.counts.knowledge_cards}</Text>
+        <Text style={styles.body}>知识卡 {summary.counts.knowledge_cards} · 技能 {summary.counts.skills}</Text>
+        <Text style={styles.body}>知识库连接 {summary.counts.provider_connections} · 绑定 {summary.counts.source_bindings}。恢复后外部知识库需重新连接和授权。</Text>
+        <Text style={styles.body}>{summary.formatVersion === 2
+          ? `技能版本 ${summary.counts.skill_revisions} · 场景绑定 ${summary.counts.skill_bindings}。恢复后技能默认停用。`
+          : "此旧版备份不包含技能，恢复后技能库将为空。"}</Text>
         <Text style={styles.body}>备份不包含 API Key。</Text>
-        <Text style={local.warning}>恢复会覆盖设备上现有的学习记录和模型设置。</Text>
+        <Text style={local.warning}>恢复会覆盖设备上现有的学习记录、技能、知识库绑定和模型设置。</Text>
         {feedback}
         <ChatAction label={busy ? "正在恢复…" : "确认覆盖并恢复"} disabled={busy} danger
           onPress={() => void confirm(preview.raw)} />

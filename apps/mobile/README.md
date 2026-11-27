@@ -1,8 +1,12 @@
 # Learn Pace Android 客户端
 
-Learn Pace 在 Android ARM64 上使用 Expo 58、React Native 0.88.1 和 Hermes。冷启动进入「问答」。「学习」「问答」「精通之路」「我的」四个 Tab 支持离线查看本地数据。既有数据库迁移到 SQLite v5，继续使用 WAL。
+Learn Pace 在 Android ARM64 上使用 Expo 58、React Native 0.88.1 和 Hermes。冷启动进入「问答」。「学习」「问答」「精通之路」「我的」四个 Tab 支持离线查看本地数据。当前数据库使用 SQLite v9 和 WAL，升级保留已有学习数据。
 
 开发版可通过 **我的 → 打开 M1 验证工作台** 运行 DeepSeek 流式问答和比例练习。Application Host 将私有题卡写入 `learn-pace.db`，界面展示 Domain 的公开题卡。启动时恢复保存的待答题，提交时先保存原始答案，再评分并更新掌握度和下次复习时间。
+
+**我的 → 技能管理 → 技能市场**默认打开 DeepTutor 的 EduHub，也可以切换 SkillHub 或 ClawHub。选定技能后核对发布者、版本和依赖，再确认安装。安装后可到技能详情启用并绑定问答或 Dito，详情也提供同源更新。**添加技能**继续支持本地文件和公开 GitHub。[EduHub](https://eduhub.deeptutor.info/)
+
+技能市场在隔离的 Android ARM64 Release 上验收。EduHub 的 `socratic-tutor@1.0.0` 通过搜索、预览、取消、确认安装和问答绑定。SkillHub 的 `find-skill-skillhub@1.0.2` 通过对象存储跳转、ZIP 校验和安装，保存发布者与版本。ClawHub 的 `steipete/gifgrep@1.0.1` 通过预览并显示缺失的 CLI 依赖。ClawHub 至 GitHub 的转交用模拟响应验证。
 
 ## Android 开发构建
 
@@ -15,7 +19,7 @@ corepack pnpm install --frozen-lockfile
 corepack pnpm --filter @learn-pace/mobile android --device
 ```
 
-在 **我的 → DeepSeek Flash** 填写网关地址、模型 ID 和 API Key。地址及非敏感模型参数写入 SQLite，Key 仅存入 SecureStore。同源修改可留空沿用旧 Key。协议、主机或端口变化时填写目标网关的 Key。点击 **测试连通性** 发起一次短探测。
+**我的 → DeepSeek Flash** 默认填入 `https://api.deepseek.com` 和 `deepseek-flash`。输入官方 API Key 后点击 **保存模型配置**，再用 **测试连通性** 发起短探测。已有自定义网关可通过 **使用 DeepSeek 官方配置** 回填默认值，也可以继续编辑网关地址与模型。地址及非敏感参数写入 SQLite，Key 仅存入 SecureStore。变更网关来源时填写目标网关的 Key。[DeepSeek 官方文档](https://api-docs.deepseek.com/zh-cn/)
 
 开发版连接 USB 后，可运行配对脚本。
 
@@ -288,3 +292,67 @@ Redmi K20 Pro 尊享版，Android 11，ADB `86ceabbf`。使用独立 ARM64 Relea
 | 冷启动中位数 | 225 ms | 221 ms | −4 ms |
 
 最终 APK 使用本地调试签名。真机冷启动样本为 221 / 222 / 203 ms，使用与 M3 相同的 `am force-stop`、等待两秒和 `am start -W` 测量流程。SHA-256 为 `e30e51d348089ecac340f745fd170c3aaa27be1a8d7948a6d3c6c203772988ca`。已验证只有 ARM64 原生库，包内无本机配置的网关地址或 API Key。全仓类型检查及 218 项测试通过。
+
+## M2-D 技能管理与自动发现门禁
+
+在「我的 → 技能管理」导入本地 `SKILL.md`、ZIP 或公开 GitHub 技能。预览确认后默认停用。在详情中启用技能并分别绑定问答或 Dito 小老师，即可在对应输入框中手动选用一个技能。助手回复的「技能记录」可查看加载版本和参考读取结果。备份 v2 导出当前技能版本，恢复后技能和场景绑定均默认停用。v1 的 SQLite v5 和 v6 备份仍可恢复。
+
+### DeepSeek Flash 实测 · 2026-11-26
+
+运行 `corepack pnpm --filter @learn-pace/app-host smoke:skills`，以真实 Host 解析器和只读工具执行 36 次发现测试、12 个无技能基线、6 次精通导航和 3 次流式取消。额外 prompt tokens 按同一问题的累计 prompt tokens 与该问题一次无技能基线之差计算。
+
+| 指标 | 实测 | 通过线 |
+| --- | ---: | ---: |
+| 正确加载 | 18/18 | ≥ 80% |
+| 正确读取参考 | 9/9 | ≥ 80% |
+| 无关问题误加载 | 0/18 | ≤ 20% |
+| 模型轮次中位数 / 最大值 | 1.5 / 4 | ≤ 4 / < 8 |
+| 额外 prompt tokens 中位数 | 500 | ≤ 8,000 |
+| 取消后 2 秒内进入 `cancelled` | 3/3（3–17 ms） | 100% |
+| 正确调用导航并生成交接卡 | 5/6 | 100% |
+
+一次继续精通会话的第三轮请求收到 HTTP 400，未生成交接卡。自动发现门禁未通过，`autoDiscoveryEnabled` 保持关闭。手动选用的技能仍可读取其固定版本中的文本参考文件。
+
+### Android ARM64 Gate 13 · 2026-11-26
+
+在 Redmi K20 Pro 尊享版（Android 11）上安装隔离包 `app.learnpace.m2dcheck`。交互及真实模型用例使用 ARM64 Release，并发和恢复用例使用可读取隔离数据库的诊断构建。并发验证在首个模型网络请求处暂停，复用实际 Host、Hermes 与 SQLite。
+
+| 验收场景 | 真机结果 |
+| --- | --- |
+| 文件与公开 GitHub | `SKILL.md` 预览后安装，验证默认停用，再绑定问答和 Dito。ZIP 同源更新展示文件差异和不可执行脚本说明。公开 GitHub 包保存固定提交。重复 YAML 键与 512 KiB 超限文件被拒绝。 |
+| 显式调用与历史 | 问答和 Dito 均让真实 DeepSeek Flash 读取了同一版本的参考文件，收据记录加载版本和读取路径。更新后旧版重新生成被拒绝，原答复保留。「用当前版本重新发送」只回填草稿及技能。失效首发保留草稿及技能选择。 |
+| 并发与强停 | 运行中更新、停用和卸载后，原回合保留旧版本，新回合受新状态约束。两个更新预览先后确认时，后者明确要求重新预览。失效首发前后 SQLite 快照相等。强停并启动新进程后，已落定收据保留，未完成调用标为结果未确认。 |
+| v2 备份 | 导出 11 表后独立复算 SHA-256，恢复后技能和绑定均停用。回合运行中卸载后导出，载荷排除待回收修订，恢复后旧收据保留。 |
+| 历史 v1 备份 | 使用既有 SQLite v5 和 v6 导出文件完成恢复。预览明确提示技能库将为空。 |
+| 无技能回归 | v6 恢复后打开精通之路、错题、知识卡及提醒页面。最终 Release 使用真实模型完成普通问答、问答自测和 Dito 追问。精通导师保存大纲并进入学习会话。全仓 282 项测试通过，覆盖既有 P0 / V0.4 行为。 |
+
+| ARM64 指标 | M3 基线 | M2-D | 变化 |
+| --- | ---: | ---: | ---: |
+| Release APK | 38,843,754 字节 | 40,030,000 字节 | +1,186,246 字节 |
+| 冷启动中位数 | 225 ms | 211 ms | −14 ms |
+
+最终 APK 仅包含 ARM64 原生库。三次从进程强停后的冷启动分别为 227、211 和 209 ms，按 M3 流程在强停后等待两秒，再用 `am start -W` 记录 `TotalTime`。APK SHA-256 为 `f9dbf84db93df06993f37bfe7d4b67e78576c6885b1afdd805b43576e66cf3d1`。
+
+## Change 14a 只读 ima 知识库真机验收（Gate 14） · 2026-11-26
+
+Redmi K20 Pro 尊享版，Android 11、ARM64，Expo `58.0.22` 与 Hermes。隔离验收包以同一应用服务、SQLite 和 SecureStore 运行真实 ima OpenAPI 与 DeepSeek Flash，USB 回环仅用于一次性配置。标准 Release 使用独立应用 ID 并核验了冷启动、问答知识库菜单、管理页面、连接前数据流向提示及一键启用 `ima-knowledge`。
+
+| 验收项 | 真机结果 |
+|---|---|
+| 连接与库权限 | 探测成功，约 1,013 ms。两页发现 30 个库，含 3 个个人库、13 个共享库和 14 个订阅库。个人库目录与自建笔记可读，订阅库可浏览但所测条目正文返回 `content_unavailable`。共享库签名下载权限差异见前置 PoC。 |
+| 选库问答与引用 | 两个个人测试库使用同标题笔记、不同正文。无库回合没有调用 ima，也没有答出测试词。选中指定库后，模型调用 `knowledge_search` 与 `knowledge_read` 读到笔记，答出正确测试词并生成一个经校验的离线引用。两种回答模式均仅查询所选库。 |
+| 不可读资料与取消 | PDF 返回 `unsupported`，订阅资源返回 `content_unavailable`。两种资源在仅知识库模式均显示正文不可读且零引用。隔离网络错误返回 `network_error`，主动取消实机请求的原生信号生效。真实 Markdown 下载与重定向、5 MiB 边界见 PoC §5。 |
+| 小老师、撤权和恢复 | 小老师继承父回合的授权库并生成引用。断开后普通问答的历史和引用、小老师父会话与选文没有再次发送测试正文，针对原回复的自测请求被拒绝。本机仍可查看历史引用。v2 schema v8 恢复后连接断开、绑定待确认、旧凭据保留为退役槽位，历史引用仍可读。v2 schema v7 与 v1 schema v5/v6 均成功恢复。 |
+| 凭据边界 | 实测 SQLite 快照无明文凭据，备份无明文凭据或签名下载 URL，连接导出为空凭据且断开。验收日志和标准 Release bundle 通过本机配置值扫描。 |
+
+[ima OpenAPI PoC](../../docs/evaluation/ima-openapi-poc-report-v0.5.md)
+
+| ARM64 指标 | M3 基线 | Change 13 | Change 14a |
+|---|---:|---:|---:|
+| Release APK | 38,843,754 字节 | 40,030,000 字节 | 40,151,388 字节 |
+| 冷启动中位数 | 225 ms | 211 ms | 241 ms |
+| 仅知识库回答首字 | — | — | 8,262 ms |
+| 结合知识库的普通问答首字 | — | — | 1,891 ms |
+| 两种模式的标题检索耗时 | — | — | 1,199 / 1,126 ms |
+
+冷启动按 M3 流程测得 297、214、241 ms，首字与标题检索为同一测试问题在两种模式下各一次的样本。仅知识库模式的首字出现在可读正文取得后。Release APK SHA-256 为 `7cffda873316a0539d9b3304d30afea1738f40b0e95a8008ac2bbca47a856b4b`。全仓类型检查、313 项测试与 26 项 OpenSpec 严格校验通过。

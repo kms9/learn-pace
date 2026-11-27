@@ -26,6 +26,7 @@ export interface RuntimeTool {
   description: string;
   parameters: Record<string, unknown>;
   privateArgs?: boolean;
+  available?: () => boolean;
   termination?(output: JsonValue): { question?: PublicPendingQuestion } | undefined;
   execute(
     args: Record<string, unknown>,
@@ -125,6 +126,7 @@ export class PiDurableRuntime implements AgentRuntime {
         else if (!questionAttempted) bufferedText.push(delta);
       }, (message) => { failure = message; }, this.fetch, request.onModelRound);
       const offered = [...this.tools.values()].filter((tool) => allowed.has(tool.name));
+      const conditional = new Map(offered.flatMap((tool) => tool.available ? [[tool.name, tool.available] as const] : []));
       const hasTerminator = offered.some((tool) => tool.termination);
       let toolQueue: Promise<unknown> = Promise.resolve();
       const tools = offered.map((tool) =>
@@ -203,10 +205,13 @@ export class PiDurableRuntime implements AgentRuntime {
         hooks: [
           hook(GenerationTask, {
             beforeRequest({ messages }) {
-              if (!history.length) return;
-              const firstInput = messages.findIndex(({ role }) => role !== "system");
-              if (firstInput < 0) return;
-              return { messages: [...messages.slice(0, firstInput), ...history, ...messages.slice(firstInput)] };
+              if (!history.length && !conditional.size) return;
+              const prepared = conditional.size ? messages.map((message) => message.role === "system" && message.toolsAdded
+                ? { ...message, toolsAdded: message.toolsAdded.filter(({ name }) => conditional.get(name)?.() !== false) }
+                : message) : messages;
+              const firstInput = prepared.findIndex(({ role }) => role !== "system");
+              return { messages: !history.length || firstInput < 0 ? prepared
+                : [...prepared.slice(0, firstInput), ...history, ...prepared.slice(firstInput)] };
             },
             afterResponse(message) {
               const questionCall = register && message.content.find(

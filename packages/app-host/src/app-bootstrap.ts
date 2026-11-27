@@ -13,6 +13,10 @@ import { restoreGateFor, type RestoreGate } from "./restore-gate.js";
 import { BackupRestoreService } from "./backup-restore.js";
 import type { BackupDigest } from "./backup-format.js";
 import { ReviewReminderService, type NotificationSchedulerPort } from "./reminders.js";
+import { hasActiveChatTurns } from "./chat-turns.js";
+import { SkillService } from "./extensions/skills/skill-service.js";
+import { TurnExtensionResolver } from "./extensions/turn-scope/index.js";
+import { KnowledgeService } from "./extensions/knowledge/knowledge-service.js";
 export { ModelSettingsError, type PublicModelSettings } from "./model-settings.js";
 
 export interface BootstrapSnapshot {
@@ -35,6 +39,7 @@ function probeFailure(runtimeError: string | undefined): string {
 export class AppBootstrapService {
   private mastery?: MasterySessionService;
   private reminders?: ReviewReminderService;
+  private knowledge?: KnowledgeService;
   private readonly restoreGate: RestoreGate;
   constructor(
     private readonly store: AppStore,
@@ -48,7 +53,10 @@ export class AppBootstrapService {
 
   createBackupRestoreService(appVersion: string, sha256: BackupDigest, clock = systemClock): BackupRestoreService {
     return new BackupRestoreService(this.store, this.secrets, { appVersion, sha256, clock, makeId: this.transport.makeId },
-      () => this.reminders?.afterLearningChange(false));
+      () => {
+        this.knowledge?.invalidateAll();
+        this.reminders?.afterLearningChange(false);
+      });
   }
 
   createReviewReminderService(platform: NotificationSchedulerPort, clock = systemClock): ReviewReminderService {
@@ -101,7 +109,16 @@ export class AppBootstrapService {
   }
 
   createLf01ChatService(clock = systemClock): Lf01ChatService {
-    return new Lf01ChatService(this.store, clock, this.transport.makeId, () => this.getModelConfig(), this.transport.fetch);
+    return new Lf01ChatService(this.store, clock, this.transport.makeId, () => this.getModelConfig(), this.transport.fetch,
+      this.restoreGate, new TurnExtensionResolver(this.store), this.createKnowledgeService(clock));
+  }
+
+  createKnowledgeService(clock = systemClock): KnowledgeService {
+    return this.knowledge ??= new KnowledgeService(this.store, this.secrets, clock, this.transport.makeId, this.transport.fetch);
+  }
+
+  createSkillService(clock = systemClock): SkillService {
+    return new SkillService(this.store, clock, () => hasActiveChatTurns(this.store), this.transport.fetch);
   }
 
   createMasterySessionService(clock = systemClock): MasterySessionService {

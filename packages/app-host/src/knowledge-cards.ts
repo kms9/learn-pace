@@ -4,6 +4,7 @@ import { limitText } from "./chat-turns.js";
 import { selectionInChatMessage, type ChatSelection } from "./lf01-chat.js";
 import { questionLeaves } from "./mastery/study.js";
 import { restoreGateFor } from "./restore-gate.js";
+import { messageKnowledgeProvenance } from "./extensions/knowledge/provenance.js";
 
 export class KnowledgeCardError extends Error {}
 
@@ -27,13 +28,14 @@ export class KnowledgeCardService {
     return restoreGateFor(this.store).writeAfterRestore(() => this.store.listKnowledgeCards({ query }));
   }
 
-  saveSelection(sessionId: string, messageId: string, selection: ChatSelection) {
+  saveSelection(sessionId: string, messageId: string, selection: ChatSelection, confirmKnowledge = false) {
     return this.edit(async (tx) => {
       const [session, message] = await Promise.all([tx.getSession(sessionId), tx.getMessage(messageId)]);
       if (!session || (session.kind !== "lf01" && session.kind !== "little_tutor") ||
           message?.session_id !== sessionId || message.status !== "committed" || message.metadata?.quick_check !== undefined) {
         throw new KnowledgeCardError("原消息已无法收藏");
       }
+      if (messageKnowledgeProvenance(message) && !confirmKnowledge) throw new KnowledgeCardError("请确认将外部知识库内容保存到本地知识卡。");
       const { text } = selectionInChatMessage(message, selection);
       return this.create(tx, text, text, { source_kind: session.kind === "lf01" ? "chat" : "little_tutor",
         path_id: null, source_session_id: sessionId, source_message_id: messageId, source_interaction_id: null });

@@ -286,3 +286,27 @@ it("reuses the caller's transaction and rolls reconciliation back with it", asyn
   expect(await store.listMessages(session)).toEqual([user]);
   expect((await service.reconcileAll()).interruptedMessages).toBe(1);
 });
+
+it("reclaims orphan skill bytes on restart and marks only pending receipts unknown", async () => {
+  const { store, reopen } = await setup();
+  const app = new AppBootstrapService(store, new MemorySecretStore(), { makeId: () => "restart-fixture" });
+  const service = app.createSkillService();
+  const source = (body: string) => new TextEncoder().encode(`---\nname: restore-coach\ndescription: Teach fractions\n---\n${body}`);
+  const old = await service.confirm(await service.previewLocal(source("old"), "local_file"));
+  const active = await service.confirm(await service.previewLocal(source("active"), "local_file"));
+  const current = await store.getSkillRevision(active.skill_id, active.active_revision);
+  await store.saveSkillRevision({ ...current!, revision: old.active_revision });
+  await store.saveSkillRevision({ ...current!, skill_id: "removed" });
+  const chat = app.createLf01ChatService();
+  const session = await chat.createSession();
+  const receipt = { turnId: "restart-turn", skillId: old.skill_id, name: old.name, revision: old.active_revision, mode: "automatic" };
+  const receipts = [{ ...receipt, status: "loaded" }, { ...receipt, status: "started", tool: "read_skill_file" }];
+  await store.saveMessage({ message_id: "progressing", session_id: session.session_id, role: "assistant", status: "generating",
+    turn_id: "restart-turn", content: "部分回答", created_at: 12, metadata: { skill_receipts: receipts } });
+
+  await reopen();
+  expect((await store.exportSnapshot()).skill_revisions).toEqual([current]);
+  expect(await store.getSkill(active.skill_id)).toEqual(active);
+  expect(await store.getMessage("progressing")).toMatchObject({ status: "interrupted", content: "部分回答",
+    metadata: { skill_receipts: [receipts[0], { ...receipts[1], status: "unknown" }] } });
+});

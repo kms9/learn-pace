@@ -8,6 +8,11 @@ export interface ModelConfig {
   maxTokens: number;
 }
 
+export const deepSeekOfficialDefaults = {
+  baseUrl: "https://api.deepseek.com",
+  model: "deepseek-flash",
+} as const;
+
 export function requestModelId(config: ModelConfig): string {
   return config.model.replace(/^openai\//, "");
 }
@@ -42,7 +47,8 @@ export function loadModelConfigFromEnv(
 
   return {
     baseUrl: baseUrl.replace(/\/+$/, ""),
-    model: env.PI_MODEL?.trim() || "openai/deepseek-v4.1-flash",
+    model: env.PI_MODEL?.trim() || (url.origin === deepSeekOfficialDefaults.baseUrl
+      ? deepSeekOfficialDefaults.model : "openai/deepseek-v4.1-flash"),
     apiType,
     apiKey,
     reasoning,

@@ -45,6 +45,23 @@ it("parses and trims the configured DeepSeek model settings", () => {
   })).toEqual(modelConfig);
 });
 
+it("uses the official Flash model and Chat Completions path for the official endpoint", async () => {
+  const fetch = mockDeepSeek(completion([text("Hello")]));
+  const official = loadModelConfigFromEnv({
+    PI_OPENAI_BASE_URL: "https://api.deepseek.com",
+    OPENAI_API_KEY: "fixture-official-key",
+    PI_REASONING: "high",
+  });
+  expect(official.model).toBe("deepseek-flash");
+  expect(await collect(new PiDurableRuntime(official))).toMatchObject([
+    { type: "text_delta", delta: "Hello" },
+    { type: "turn_completed", stopReason: "end_turn" },
+  ]);
+  const [url, options] = fetch.mock.calls[0]!;
+  expect(String(url)).toBe("https://api.deepseek.com/chat/completions");
+  expect(JSON.parse(String(options?.body))).toMatchObject({ model: "deepseek-flash", stream: true });
+});
+
 it.each([
   ["PI_OPENAI_BASE_URL", "file:///tmp/test"],
   ["OPENAI_API_KEY", " "],

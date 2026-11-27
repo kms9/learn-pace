@@ -21,3 +21,8 @@ Learn Pace 第三方来源声明
 Learn Pace 经 Cherry Studio Mobile 作者授权，可复用其代码与设计。Android Metro 配置、
 Pi Durable 移动端适配和补丁评估参考 Cherry Studio Mobile 提交 14a0224。
 适配范围见 patches/README.md，上游许可证随 upstream/cherry-studio-mobile 检出。
+
+技能管理参考并改编自同一提交的 src/backend/services/skill/{skillPackage,
+skillArchive,skillSources,skillCompatibility}.ts、src/backend/utils/zipReader.ts、
+src/shared/utils/sha256.ts 与 src/backend/ai/agent/tools/skill/skillTools.ts。
+上游许可证为 AGPL-3.0，见 upstream/cherry-studio-mobile/LICENSE。

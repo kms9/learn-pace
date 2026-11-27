@@ -168,12 +168,12 @@ Connection/Binding 持久化只存公开描述和 credential_ref；保密项独�
 
 | 顺序 | Change | 交付 | Gate |
 |---|---|---|---|
-| 10 | m2c-mobile-skill-management | 导入/预览/启用/按需加载/引用文件、LF01与小老师、版本/备份/安全 | 自定义教学 Skill 真机触发、关闭后不触发、无脚本执行、恶意包拒绝、恢复与原回归通过 |
-| 11 | m2c-ima-knowledge-lf01 | 通用 KnowledgeProvider + ima 只读连接、库选择、查询/原文/引用、兼容 Skill | 真机以真实 ima 库（含一个人工植入可核验的独有事实）完成配置、搜索、读、问答、断网、撤销及重启；没有额外服务 |
-| 12 | m2c-knowledge-mastery | 路径绑定、Outline/Study/Review | 源证据与学习证据分离、题卡恢复、独立性、评分与复习回归 |
-| 后续 | 待评审 | 技能市场/发布、远程 MCP、SkillHub/ima Skill 广场、其它 Provider、资料解析、写入 | 单独立项，不在 M2-C 承诺 |
+| 13 | m2d-mobile-skill-management | 导入/预览/启用/按需加载/引用文件、LF01与小老师、SQLite v6→v7、备份 `format_version: 2`（兼容 v1 schema 5/6） | 自定义教学 Skill 真机触发、关闭后不触发、无脚本执行、恶意包拒绝、恢复与原 P0/V0.4 回归通过 |
+| 14 | m2d-ima-knowledge-lf01 | 通用 KnowledgeProvider + ima 只读连接、库选择、查询/原文/引用、兼容 Skill | 真机以真实 ima 库（含一个人工植入可核验的独有事实）完成配置、搜索、读、问答、断网、撤销及重启；没有额外服务 |
+| 15 | m2d-knowledge-mastery | 路径绑定、Outline/Study/Review | 源证据与学习证据分离、题卡恢复、独立性、评分与复习回归 |
+| 后续 | 待评审 | 技能市场/发布、远程 MCP、SkillHub/ima Skill 广场、其它 Provider、资料解析、写入 | 单独立项，不在 M2-D 承诺 |
 
-继续沿用每次 propose 当前 Change、实施、验收、archive，再 propose 下一项的规则。第一项详规见 [m2c-mobile-skill-management](../../openspec/changes/m2c-mobile-skill-management/proposal.md)。
+继续沿用每次 propose 当前 Change、实施、验收、archive，再 propose 下一项的规则。第一项详规见 [m2d-mobile-skill-management](../../openspec/changes/archive/2026-11-26-m2d-mobile-skill-management/proposal.md)。
 
 ### 验证矩阵
 - 基础：既有 LF01/LF02、M2-B CAS/幂等、备份、取消/强杀和恢复测试无回归；corepack pnpm typecheck / corepack pnpm test / openspec validate --all --strict。

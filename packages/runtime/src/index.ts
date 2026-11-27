@@ -1,6 +1,6 @@
 import type { PublicPendingQuestion, SessionMode } from "@learn-pace/domain";
 
-export { loadModelConfigFromEnv, requestModelId, type ModelConfig } from "./model-config.js";
+export { deepSeekOfficialDefaults, loadModelConfigFromEnv, requestModelId, type ModelConfig } from "./model-config.js";
 export { PiDurableRuntime, type RegisterQuestionHandler, type RuntimeTool } from "./pi-durable-runtime.js";
 export { gradeQualitatively, type QualitativeGradingRequest, type QualitativeGrade } from "./qualitative-grading.js";
 export { generateQuickCheck, QuickCheckGenerationError, type QuickCheckRequest, type GeneratedQuickCheck } from "./quick-check.js";

@@ -75,6 +75,13 @@ export function ChatSearch({ label, value, change }: { label: string; value: str
   </View>;
 }
 
+export function ComposerSkillChip({ skillId, remove }: { skillId: string; remove: () => void }) {
+  return <View style={styles.skillChip}>
+    <Text style={styles.skillLabel} numberOfLines={1}>{skillId}</Text>
+    <ChatAction label="移除技能" subtle onPress={remove} />
+  </View>;
+}
+
 export function ConversationComposer({ label, placeholder, testID, draft, onChangeText, editable = true,
   send, sendDisabled, stop, model, openModelSettings, children, action, inputRef }: {
   label: string;
@@ -159,6 +166,9 @@ const styles = StyleSheet.create({
   input: { minHeight: 50, maxHeight: 124, paddingHorizontal: spacing.sm, paddingVertical: spacing.sm,
     color: colors.text, fontSize: 16, lineHeight: 23, textAlignVertical: "top" },
   composerActions: { flexDirection: "row", alignItems: "center", gap: spacing.xs },
+  skillChip: { alignSelf: "flex-start", maxWidth: "100%", flexDirection: "row", alignItems: "center",
+    backgroundColor: colors.primarySoft, borderRadius: radius.pill, paddingLeft: spacing.sm },
+  skillLabel: { color: colors.primary, fontSize: typography.caption, fontWeight: "600", flexShrink: 1 },
   model: { flex: 1, minWidth: 0, paddingHorizontal: spacing.sm },
   modelButton: { minHeight: 44, justifyContent: "center" },
   modelName: { color: colors.muted, fontSize: 13, lineHeight: 19 },

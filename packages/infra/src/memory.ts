@@ -3,6 +3,8 @@ import {
   SubmissionConflictError, VersionConflictError,
   type AppStore, type DatabaseSnapshot, type PathSummaryRecord, type SecretStore, type StoredDomainEvent, type StoredInteraction,
   type KnowledgeCardFilter, type StoredKnowledgeCard, type StoredMessage, type StoredSession, type StoredThread,
+  type SkillScope, type SkillScopeEntry, type StoredSkill, type StoredSkillRevision, type StoredSkillBinding,
+  type StoredProviderConnection, type StoredSourceBinding,
 } from "./index.js";
 import { searchKnowledgeCards } from "./knowledge-card-search.js";
 import { WriteQueue } from "./write-queue.js";
@@ -22,6 +24,11 @@ export class MemoryAppStore implements AppStore {
     threads: new Map<string, StoredThread>(),
     events: new Map<string, StoredDomainEvent>(),
     cards: new Map<string, StoredKnowledgeCard>(),
+    skills: new Map<string, StoredSkill>(),
+    revisions: new Map<string, StoredSkillRevision>(),
+    bindings: new Map<string, StoredSkillBinding>(),
+    providerConnections: new Map<string, StoredProviderConnection>(),
+    sourceBindings: new Map<string, StoredSourceBinding>(),
   };
   private writes: WriteQueue | null = new WriteQueue();
 
@@ -39,7 +46,8 @@ export class MemoryAppStore implements AppStore {
 
   async exportSnapshot(): Promise<DatabaseSnapshot> {
     const read = () => {
-      const { settings, paths, sessions, messages, threads, interactions, events, cards } = this.state;
+      const { settings, paths, sessions, messages, threads, interactions, events, cards, skills, revisions, bindings,
+        providerConnections, sourceBindings } = this.state;
       return structuredClone({
         settings: [...settings].sort(([a], [b]) => byId(a, b)).map(([name, value]) => ({ name, value })),
         learning_progress: [...paths.values()].sort((a, b) => byId(a.progress.book_id, b.progress.book_id)),
@@ -49,6 +57,11 @@ export class MemoryAppStore implements AppStore {
         interactions: [...interactions.values()].sort((a, b) => byId(a.interaction_id, b.interaction_id)),
         domain_events: [...events.values()],
         knowledge_cards: [...cards.values()].sort((a, b) => byId(a.card_id, b.card_id)),
+        skills: [...skills.values()].sort((a, b) => byId(a.skill_id, b.skill_id)),
+        skill_revisions: [...revisions.values()].sort((a, b) => byId(a.skill_id, b.skill_id) || byId(a.revision, b.revision)),
+        skill_bindings: [...bindings.values()].sort((a, b) => byId(a.skill_id, b.skill_id) || byId(a.scope, b.scope)),
+        provider_connections: [...providerConnections.values()].sort((a, b) => byId(a.connection_id, b.connection_id)),
+        source_bindings: [...sourceBindings.values()].sort((a, b) => byId(a.binding_id, b.binding_id)),
       });
     };
     return this.writes ? this.writes.run(read) : read();
@@ -66,8 +79,123 @@ export class MemoryAppStore implements AppStore {
     work();
   }
 
+  async getProviderConnection(id: string): Promise<StoredProviderConnection | null> {
+    return structuredClone(this.state.providerConnections.get(id) ?? null);
+  }
+
+  async listProviderConnections(): Promise<StoredProviderConnection[]> {
+    return structuredClone([...this.state.providerConnections.values()].sort((a, b) => byId(a.connection_id, b.connection_id)));
+  }
+
+  async saveProviderConnection(connection: StoredProviderConnection): Promise<void> {
+    await this.write(() => this.state.providerConnections.set(connection.connection_id, { ...connection }));
+  }
+
+  async deleteProviderConnection(id: string): Promise<void> {
+    await this.write(() => {
+      for (const [bindingId, binding] of this.state.sourceBindings) {
+        if (binding.connection_id === id) this.state.sourceBindings.delete(bindingId);
+      }
+      this.state.providerConnections.delete(id);
+    });
+  }
+
+  async getSourceBinding(id: string): Promise<StoredSourceBinding | null> {
+    return structuredClone(this.state.sourceBindings.get(id) ?? null);
+  }
+
+  async listSourceBindings(connectionId?: string): Promise<StoredSourceBinding[]> {
+    return structuredClone([...this.state.sourceBindings.values()]
+      .filter((item) => connectionId === undefined || item.connection_id === connectionId)
+      .sort((a, b) => b.updated_at - a.updated_at || byId(a.binding_id, b.binding_id)));
+  }
+
+  async saveSourceBinding(binding: StoredSourceBinding): Promise<void> {
+    await this.write(() => {
+      const connection = this.state.providerConnections.get(binding.connection_id);
+      if (connection?.provider !== binding.provider) throw new Error("知识库连接不存在或不匹配");
+      for (const item of this.state.sourceBindings.values()) {
+        const sameLibrary = item.connection_id === binding.connection_id && item.remote_kb_id === binding.remote_kb_id;
+        if ((item.binding_id === binding.binding_id) !== sameLibrary) throw new Error("知识库绑定身份冲突");
+      }
+      this.state.sourceBindings.set(binding.binding_id, { ...binding });
+    });
+  }
+
+  async deleteSourceBinding(id: string): Promise<void> {
+    await this.write(() => this.state.sourceBindings.delete(id));
+  }
+
   async readSetting(name: string): Promise<string | null> {
     return this.state.settings.get(name) ?? null;
+  }
+
+  async getSkill(skillId: string): Promise<StoredSkill | null> {
+    return structuredClone(this.state.skills.get(skillId) ?? null);
+  }
+
+  async listSkills(): Promise<StoredSkill[]> {
+    return structuredClone([...this.state.skills.values()].sort((a, b) => byId(a.skill_id, b.skill_id)));
+  }
+
+  async saveSkill(skill: StoredSkill): Promise<void> {
+    await this.write(() => {
+      for (const item of this.state.skills.values()) {
+        if (item.skill_id !== skill.skill_id && item.origin_kind === skill.origin_kind && item.origin_locator === skill.origin_locator) {
+          throw new Error("技能来源已被占用");
+        }
+      }
+      this.state.skills.set(skill.skill_id, { ...skill });
+    });
+  }
+
+  async deleteSkill(skillId: string): Promise<void> {
+    await this.write(() => {
+      this.state.skills.delete(skillId);
+      for (const [key, binding] of this.state.bindings) {
+        if (binding.skill_id === skillId) this.state.bindings.delete(key);
+      }
+    });
+  }
+
+  async getSkillRevision(skillId: string, revision: string): Promise<StoredSkillRevision | null> {
+    return structuredClone(this.state.revisions.get(JSON.stringify([skillId, revision])) ?? null);
+  }
+
+  async saveSkillRevision(revision: StoredSkillRevision): Promise<void> {
+    await this.write(() => this.state.revisions.set(JSON.stringify([revision.skill_id, revision.revision]), { ...revision }));
+  }
+
+  async skillLibraryBytes(): Promise<number> {
+    let total = 0;
+    for (const row of this.state.revisions.values()) total += row.raw_bytes;
+    return total;
+  }
+
+  async deleteInactiveSkillRevisions(): Promise<void> {
+    await this.write(() => {
+      for (const [key, row] of this.state.revisions) {
+        if (this.state.skills.get(row.skill_id)?.active_revision !== row.revision) this.state.revisions.delete(key);
+      }
+    });
+  }
+
+  async listSkillBindings(skillId: string): Promise<StoredSkillBinding[]> {
+    return structuredClone([...this.state.bindings.values()].filter((row) => row.skill_id === skillId)
+      .sort((a, b) => byId(a.scope, b.scope)));
+  }
+
+  async saveSkillBinding(binding: StoredSkillBinding): Promise<void> {
+    await this.write(() => this.state.bindings.set(JSON.stringify([binding.skill_id, binding.scope]), { ...binding }));
+  }
+
+  async scopeSnapshot(scope: SkillScope): Promise<SkillScopeEntry[]> {
+    const { skills, revisions, bindings } = this.state;
+    return [...skills.values()].sort((a, b) => byId(a.skill_id, b.skill_id)).map((skill) => ({
+      skill: { ...skill },
+      binding: bindings.get(JSON.stringify([skill.skill_id, scope]))?.enabled ?? null,
+      manifest: revisions.get(JSON.stringify([skill.skill_id, skill.active_revision]))?.manifest_json ?? null,
+    }));
   }
 
   async writeSetting(name: string, value: string): Promise<void> {

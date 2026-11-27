@@ -2,7 +2,7 @@
 
 ## Purpose
 
-定义 P07「我的 / 设置」页面中的首期 DeepSeek Flash 外部模型配置、密钥隔离存储、连通性测试、开发期 USB 配对导入以及未配置模型时的本地离线只读降级行为。
+定义 P07「我的 / 设置」页面中的 DeepSeek Flash 官方默认连接、外部网关配置、密钥隔离存储、连通性测试、开发期 USB 配对导入以及未配置模型时的本地离线只读降级行为。
 
 ## Requirements
 
@@ -10,7 +10,7 @@
 The application SHALL store the DeepSeek Flash API key exclusively in platform secure storage (`SecureStore`) and MUST NOT persist the API key in SQLite tables, plain settings JSON, message logs, or source code.
 
 #### Scenario: Saving manual DeepSeek Flash configuration
-- **WHEN** 用户在 P07 输入 DeepSeek Flash 的网关地址、模型 ID（默认 `openai/deepseek-v4.1-flash`）与 API Key 并点击保存
+- **WHEN** 用户在 P07 确认 DeepSeek Flash 的网关地址和模型 ID，并填写 API Key 后点击保存。首次配置默认填入 `https://api.deepseek.com` 和 `deepseek-flash`
 - **THEN** API Key 被写入 `SecureStore`，其余非敏感配置写入 SQLite `settings`
 - **AND** 表单立即清空内存中的明文 Key 输入框并显示「已配置」状态
 
@@ -21,6 +21,10 @@ The application SHALL store the DeepSeek Flash API key exclusively in platform s
 #### Scenario: Requiring a key for a different gateway origin
 - **WHEN** 用户修改网关协议、主机或端口，且没有填写目标网关的 API Key
 - **THEN** 应用要求填写目标 Key，保留原配置且不会向目标网关发送旧 Key
+
+#### Scenario: Selecting DeepSeek official connection settings
+- **WHEN** 已保存自定义网关的用户点击「使用 DeepSeek 官方配置」
+- **THEN** 表单回填官方地址和 Flash 模型 ID。用户确认保存后才会更新已保存配置，切换来源时需要填写目标 Key
 
 ### Requirement: Model connectivity probe
 The settings screen SHALL allow the user to run a live connectivity test against the configured DeepSeek Flash endpoint and MUST report clear success or bounded failure feedback without exposing the API key.

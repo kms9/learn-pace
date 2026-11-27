@@ -8,6 +8,9 @@ export class RestoreGateError extends Error {
 export class RestoreGate {
   private pendingRestore?: Promise<void>;
   private activeWrites = 0;
+  private restoreVersion = 0;
+
+  get revision(): number { return this.restoreVersion; }
 
   private assertWritable(): void {
     if (this.pendingRestore) throw new RestoreGateError("正在恢复备份，请等待恢复完成。");
@@ -29,7 +32,9 @@ export class RestoreGate {
     let release!: () => void;
     this.pendingRestore = new Promise<void>((resolve) => { release = resolve; });
     try {
-      return await work();
+      const result = await work();
+      this.restoreVersion++;
+      return result;
     } finally {
       this.pendingRestore = undefined;
       release();
